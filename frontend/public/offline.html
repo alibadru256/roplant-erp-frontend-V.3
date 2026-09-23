@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Roplant ERP — Offline</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <style>
+    body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+           background: #14181C; color: #EDEFF1; font-family: Inter, -apple-system, sans-serif; text-align: center; padding: 24px; }
+    .box { max-width: 360px; }
+    .icon { width: 56px; height: 56px; border-radius: 12px; background: #E8622C; display: flex; align-items: center;
+            justify-content: center; margin: 0 auto 16px; font-weight: 800; font-size: 20px; }
+    h1 { font-size: 18px; margin: 0 0 8px; }
+    p { font-size: 14px; color: #8B95A0; line-height: 1.5; margin: 0 0 20px; }
+    button { background: #E8622C; color: #fff; border: none; padding: 10px 20px; border-radius: 6px;
+             font-size: 14px; font-weight: 500; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <div class="box">
+    <div class="icon">RS</div>
+    <h1>No connection</h1>
+    <p>Roplant ERP needs a connection to your server to show real, current data — stock levels
+       and balances are never cached, so nothing stale is shown while you're offline.</p>
+    <button onclick="location.reload()">Try again</button>
+  </div>
+</body>
+</html>

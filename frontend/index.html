@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Roplant Services Limited — ERP</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+    <!-- PWA: makes Chrome/Edge on Windows offer "Install", and gives Android/iOS a real
+         home-screen icon that opens standalone (no browser bar). -->
+    <link rel="manifest" href="/manifest.json" />
+    <meta name="theme-color" content="#14181C" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png" />
+
+    <!-- iOS Safari doesn't read manifest.json for installability — it needs these explicitly. -->
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Roplant ERP" />
+  </head>
+  <body style="margin:0">
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>

@@ -1,0 +1,314 @@
+import React, { useState, useEffect, useCallback } from 'react';
+import { api, setToken, getToken } from './api';
+
+/* Same visual identity as the original prototype — industrial dark theme, safety-orange accent. */
+const T = {
+  bg: '#14181C', surface: '#1B2126', surfaceAlt: '#20272D', border: '#2A323A',
+  text: '#EDEFF1', textMuted: '#8B95A0', textFaint: '#5C6670',
+  accent: '#E8622C', accentSoft: 'rgba(232,98,44,0.15)',
+  success: '#4FAE74', successSoft: 'rgba(79,174,116,0.15)',
+  warning: '#D9A441', warningSoft: 'rgba(217,164,65,0.15)',
+  danger: '#D9614F', dangerSoft: 'rgba(217,97,79,0.15)',
+};
+const fmt = (n) => new Intl.NumberFormat().format(Math.round(n || 0));
+
+function Card({ children, style }) {
+  return <div style={{ background: T.surface, border: `1px solid ${T.border}`, borderRadius: 10, ...style }}>{children}</div>;
+}
+function Btn({ children, onClick, variant = 'secondary', disabled, type = 'button' }) {
+  const styles = {
+    primary: { background: T.accent, color: '#fff' },
+    secondary: { background: T.surfaceAlt, color: T.text, border: `1px solid ${T.border}` },
+    danger: { background: T.dangerSoft, color: T.danger },
+  };
+  return (
+    <button type={type} disabled={disabled} onClick={onClick}
+      style={{ ...styles[variant], padding: '8px 14px', borderRadius: 6, fontSize: 14, fontWeight: 500, opacity: disabled ? 0.5 : 1, cursor: disabled ? 'not-allowed' : 'pointer' }}>
+      {children}
+    </button>
+  );
+}
+function Input(props) {
+  return <input {...props} style={{ background: T.surfaceAlt, color: T.text, border: `1px solid ${T.border}`, borderRadius: 6, padding: '8px 10px', fontSize: 14, width: '100%', ...props.style }} />;
+}
+function Banner({ tone, children }) {
+  const colors = { error: [T.dangerSoft, T.danger], success: [T.successSoft, T.success] };
+  const [bg, fg] = colors[tone] || colors.error;
+  return <div style={{ background: bg, color: fg, padding: '8px 12px', borderRadius: 6, fontSize: 13 }}>{children}</div>;
+}
+
+/* ============================== LOGIN ============================== */
+function LoginScreen({ onLogin }) {
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setError('');
+    setLoading(true);
+    try {
+      const { token, user } = await api.login(email, password);
+      setToken(token);
+      onLogin(user);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: T.bg }}>
+      <Card style={{ width: 360, padding: 28 }}>
+        <h1 style={{ color: T.text, fontSize: 20, fontWeight: 700, marginBottom: 4 }}>Roplant Services Limited</h1>
+        <p style={{ color: T.textMuted, fontSize: 13, marginBottom: 20 }}>Sign in to the inventory & business system</p>
+        <form onSubmit={submit} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <Input type="email" placeholder="Email" value={email} onChange={(e) => setEmail(e.target.value)} required autoFocus />
+          <Input type="password" placeholder="Password" value={password} onChange={(e) => setPassword(e.target.value)} required />
+          {error && <Banner tone="error">{error}</Banner>}
+          <Btn type="submit" variant="primary" disabled={loading}>{loading ? 'Signing in…' : 'Sign In'}</Btn>
+        </form>
+      </Card>
+    </div>
+  );
+}
+
+/* ============================== DASHBOARD (real data) ============================== */
+function Dashboard({ user }) {
+  const [data, setData] = useState(null);
+  const [error, setError] = useState('');
+
+  const load = useCallback(() => {
+    api.dashboard().then(setData).catch((e) => setError(e.message));
+  }, []);
+  useEffect(load, [load]);
+
+  if (error) return <Banner tone="error">Failed to load dashboard: {error}</Banner>;
+  if (!data) return <p style={{ color: T.textMuted }}>Loading dashboard…</p>;
+
+  const cards = [
+    data.monthRevenue != null && { label: 'Revenue (MTD)', value: fmt(data.monthRevenue) },
+    data.monthProfit != null && { label: 'Gross Profit (MTD)', value: fmt(data.monthProfit) },
+    data.inventoryValue != null && { label: 'Inventory Value', value: fmt(data.inventoryValue) },
+    { label: 'Low Stock', value: data.lowStockCount },
+    { label: 'Out of Stock', value: data.outOfStockCount },
+    data.receivables != null && { label: 'Receivables', value: fmt(data.receivables) },
+    data.payables != null && { label: 'Payables', value: fmt(data.payables) },
+    { label: 'Total Products', value: data.totalProducts },
+    { label: 'Sales Today', value: data.salesToday },
+  ].filter(Boolean);
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <h1 style={{ color: T.text, fontSize: 20, fontWeight: 700 }}>Dashboard — live from database</h1>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12 }}>
+        {cards.map((c) => (
+          <Card key={c.label} style={{ padding: 14 }}>
+            <div style={{ color: T.textFaint, fontSize: 11, textTransform: 'uppercase' }}>{c.label}</div>
+            <div style={{ color: T.text, fontSize: 22, fontWeight: 700, marginTop: 4 }}>{c.value}</div>
+          </Card>
+        ))}
+      </div>
+      <Card style={{ padding: 14 }}>
+        <div style={{ color: T.text, fontWeight: 600, marginBottom: 8 }}>Recent Sales</div>
+        {data.recentSales.length === 0 && <p style={{ color: T.textFaint, fontSize: 13 }}>No sales yet.</p>}
+        {data.recentSales.map((s) => (
+          <div key={s.invoice_no} style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: `1px solid ${T.border}`, fontSize: 13 }}>
+            <span style={{ color: T.text }}>{s.customer_name} · {s.invoice_no}</span>
+            <span style={{ color: T.textMuted }}>{fmt(s.total)} — {s.status}</span>
+          </div>
+        ))}
+      </Card>
+    </div>
+  );
+}
+
+/* ============================== PRODUCTS & INVENTORY (real data) ============================== */
+function ProductsInventory() {
+  const [products, setProducts] = useState([]);
+  const [search, setSearch] = useState('');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(true);
+
+  const load = useCallback(() => {
+    setLoading(true);
+    api.listProducts({ search }).then((d) => setProducts(d.products)).catch((e) => setError(e.message)).finally(() => setLoading(false));
+  }, [search]);
+  useEffect(load, [load]);
+
+  const adjust = async (id, direction) => {
+    const reason = window.prompt(`Reason for this ${direction.toLowerCase()} (required):`);
+    if (!reason) return;
+    const qty = Number(window.prompt('Quantity:', '1'));
+    if (!qty || qty <= 0) return;
+    try {
+      await api.adjustStock(id, { direction, qty, reason });
+      load();
+    } catch (e) {
+      alert(e.message);
+    }
+  };
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <h1 style={{ color: T.text, fontSize: 20, fontWeight: 700 }}>Products & Inventory — live from database</h1>
+      <Input placeholder="Search…" value={search} onChange={(e) => setSearch(e.target.value)} style={{ maxWidth: 320 }} />
+      {error && <Banner tone="error">{error}</Banner>}
+      {loading ? <p style={{ color: T.textMuted }}>Loading…</p> : (
+        <Card style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', fontSize: 13, borderCollapse: 'collapse' }}>
+            <thead>
+              <tr style={{ borderBottom: `1px solid ${T.border}` }}>
+                {['Name', 'SKU', 'Stock', 'Min', 'Max', 'Cost', 'Sell', ''].map((h) => (
+                  <th key={h} style={{ textAlign: 'left', padding: 10, color: T.textFaint, fontWeight: 500 }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {products.map((p) => (
+                <tr key={p.id} style={{ borderBottom: `1px solid ${T.border}` }}>
+                  <td style={{ padding: 10, color: T.text }}>{p.name}</td>
+                  <td style={{ padding: 10, color: T.textMuted, fontFamily: 'monospace' }}>{p.sku}</td>
+                  <td style={{ padding: 10, color: p.stock_qty <= p.reorder_level ? T.danger : T.text }}>{p.stock_qty}</td>
+                  <td style={{ padding: 10, color: T.textMuted }}>{p.reorder_level}</td>
+                  <td style={{ padding: 10, color: T.textMuted }}>{p.max_stock}</td>
+                  <td style={{ padding: 10, color: T.textMuted }}>{fmt(p.cost_price)}</td>
+                  <td style={{ padding: 10, color: T.text }}>{fmt(p.sell_price)}</td>
+                  <td style={{ padding: 10, display: 'flex', gap: 6 }}>
+                    <Btn onClick={() => adjust(p.id, 'Increase')}>+</Btn>
+                    <Btn onClick={() => adjust(p.id, 'Decrease')}>−</Btn>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Card>
+      )}
+    </div>
+  );
+}
+
+/* ============================== POS (real checkout transaction) ============================== */
+function POS({ user }) {
+  const [products, setProducts] = useState([]);
+  const [customers, setCustomers] = useState([]);
+  const [cart, setCart] = useState([]);
+  const [customerId, setCustomerId] = useState('');
+  const [payment, setPayment] = useState('Cash');
+  const [error, setError] = useState('');
+  const [receipt, setReceipt] = useState(null);
+
+  useEffect(() => {
+    api.listProducts({}).then((d) => setProducts(d.products)).catch((e) => setError(e.message));
+    api.listCustomers().then((d) => { setCustomers(d.customers); if (d.customers[0]) setCustomerId(d.customers[0].id); }).catch((e) => setError(e.message));
+  }, []);
+
+  const addToCart = (p) => {
+    setCart((prev) => {
+      const existing = prev.find((i) => i.productId === p.id);
+      if (existing) return prev.map((i) => i.productId === p.id ? { ...i, qty: i.qty + 1 } : i);
+      return [...prev, { productId: p.id, name: p.name, price: Number(p.sell_price), qty: 1 }];
+    });
+  };
+  const total = cart.reduce((s, i) => s + i.price * i.qty, 0);
+
+  const checkout = async () => {
+    setError('');
+    try {
+      const sale = await api.completeSale({
+        customerId: Number(customerId),
+        items: cart.map((i) => ({ productId: i.productId, qty: i.qty })),
+        discountPct: 0,
+        paymentMethod: payment,
+      });
+      setReceipt(sale.sale);
+      setCart([]);
+      api.listProducts({}).then((d) => setProducts(d.products)); // refresh stock levels shown
+    } catch (e) {
+      setError(e.message);
+    }
+  };
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <h1 style={{ color: T.text, fontSize: 20, fontWeight: 700 }}>Sales / POS — real transaction</h1>
+      {error && <Banner tone="error">{error}</Banner>}
+      <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 16 }}>
+        <Card style={{ padding: 12, display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px,1fr))', gap: 10, maxHeight: 420, overflowY: 'auto' }}>
+          {products.map((p) => (
+            <div key={p.id} onClick={() => addToCart(p)} style={{ cursor: 'pointer', border: `1px solid ${T.border}`, borderRadius: 8, padding: 8 }}>
+              <div style={{ color: T.text, fontSize: 13 }}>{p.name}</div>
+              <div style={{ color: T.textMuted, fontSize: 12 }}>{fmt(p.sell_price)} · {p.stock_qty} in stock</div>
+            </div>
+          ))}
+        </Card>
+        <Card style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <div style={{ color: T.text, fontWeight: 600 }}>Cart</div>
+          {cart.map((i) => (
+            <div key={i.productId} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: T.text }}>
+              <span>{i.qty}× {i.name}</span><span>{fmt(i.price * i.qty)}</span>
+            </div>
+          ))}
+          <select value={customerId} onChange={(e) => setCustomerId(e.target.value)} style={{ background: T.surfaceAlt, color: T.text, border: `1px solid ${T.border}`, borderRadius: 6, padding: 8 }}>
+            {customers.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+          <select value={payment} onChange={(e) => setPayment(e.target.value)} style={{ background: T.surfaceAlt, color: T.text, border: `1px solid ${T.border}`, borderRadius: 6, padding: 8 }}>
+            <option>Cash</option><option>Card</option><option>Mobile Money</option><option>Credit</option>
+          </select>
+          <div style={{ color: T.text, fontWeight: 700, fontSize: 16 }}>Total: {fmt(total)}</div>
+          <Btn variant="primary" disabled={cart.length === 0} onClick={checkout}>Complete Sale</Btn>
+        </Card>
+      </div>
+      {receipt && (
+        <Banner tone="success">Sale {receipt.invoice_no} completed — total {fmt(receipt.total)}. Stock, customer balance, and the ledger were all updated by the server in one transaction.</Banner>
+      )}
+    </div>
+  );
+}
+
+/* ============================== APP ROOT ============================== */
+export default function App() {
+  const [user, setUser] = useState(null);
+  const [module, setModule] = useState('dashboard');
+  const [checkingSession, setCheckingSession] = useState(true);
+
+  useEffect(() => {
+    if (getToken()) {
+      api.me().then((d) => setUser(d.user)).catch(() => setToken(null)).finally(() => setCheckingSession(false));
+    } else {
+      setCheckingSession(false);
+    }
+    const onUnauthorized = () => setUser(null);
+    window.addEventListener('roplant:unauthorized', onUnauthorized);
+    return () => window.removeEventListener('roplant:unauthorized', onUnauthorized);
+  }, []);
+
+  if (checkingSession) return null;
+  if (!user) return <LoginScreen onLogin={setUser} />;
+
+  const logout = async () => { await api.logout().catch(() => {}); setToken(null); setUser(null); };
+
+  return (
+    <div style={{ minHeight: '100vh', background: T.bg, fontFamily: 'Inter, sans-serif', display: 'flex' }}>
+      <aside style={{ width: 200, background: T.surface, borderRight: `1px solid ${T.border}`, padding: 16, display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <div style={{ color: T.text, fontWeight: 700, marginBottom: 12 }}>Roplant ERP</div>
+        {['dashboard', 'inventory', 'pos'].map((m) => (
+          <button key={m} onClick={() => setModule(m)}
+            style={{ textAlign: 'left', padding: '8px 10px', borderRadius: 6, background: module === m ? T.accentSoft : 'transparent', color: module === m ? T.accent : T.textMuted, textTransform: 'capitalize' }}>
+            {m}
+          </button>
+        ))}
+        <div style={{ flex: 1 }} />
+        <div style={{ color: T.textFaint, fontSize: 12 }}>{user.name} · {user.role}</div>
+        <Btn onClick={logout}>Log out</Btn>
+      </aside>
+      <main style={{ flex: 1, padding: 24, overflowY: 'auto' }}>
+        {module === 'dashboard' && <Dashboard user={user} />}
+        {module === 'inventory' && <ProductsInventory />}
+        {module === 'pos' && <POS user={user} />}
+      </main>
+    </div>
+  );
+}

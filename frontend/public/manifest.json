@@ -1,0 +1,16 @@
+{
+  "name": "Roplant Services Limited — ERP",
+  "short_name": "Roplant ERP",
+  "description": "Inventory, sales, purchasing, and accounting for Roplant Services Limited.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#14181C",
+  "theme_color": "#14181C",
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
