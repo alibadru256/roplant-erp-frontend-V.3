@@ -230,6 +230,7 @@ const api = {
   setUserStatus: (id, status) => apiRequest(`/users/${id}/status`, { method: 'PUT', body: { status } }),
 
   listAuditLog: (params = {}) => apiRequest(`/audit?${new URLSearchParams(params)}`),
+  clearAuditLog: () => apiRequest('/audit', { method: 'DELETE' }),
 
   listSales: (params = {}) => apiRequest(`/sales?${new URLSearchParams(params)}`),
   createSale: (sale) => apiRequest('/sales', { method: 'POST', body: sale }),
@@ -1105,7 +1106,7 @@ export default function App() {
           {activeModule === 'suppliers' && <Suppliers {...ctx} suppliers={suppliers} refetchSuppliers={refetchSuppliers} purchaseOrders={purchaseOrders} />}
           {activeModule === 'returns' && <ReturnsModule {...ctx} products={products} refetchProducts={refetchProducts} sales={sales} customers={customers} refetchCustomers={refetchCustomers} suppliers={suppliers} refetchSuppliers={refetchSuppliers} returns={returns} refetchReturns={refetchReturns} />}
           {activeModule === 'reports' && <Reports {...ctx} products={products} sales={sales} purchaseOrders={purchaseOrders} customers={customers} suppliers={suppliers} movements={movements} returns={returns} />}
-          {activeModule === 'users' && <UsersSecurity {...ctx} users={users} refetchUsers={refetchUsers} permissions={permissions} setPermissions={setPermissions} auditLog={auditLog} />}
+          {activeModule === 'users' && <UsersSecurity {...ctx} users={users} refetchUsers={refetchUsers} permissions={permissions} setPermissions={setPermissions} auditLog={auditLog} setAuditLog={setAuditLog} refetchAuditLog={refetchAuditLog} />}
           {activeModule === 'settings' && <SettingsPage {...ctx} companyInfo={companyInfo} setCompanyInfo={setCompanyInfo} />}
         </main>
       </div>
@@ -1134,19 +1135,35 @@ function Dashboard({ t, role, companyInfo, products, sales, customers, suppliers
   const salesThisMonth = sales.filter(x => (x.date || '').slice(0, 7) === monthKey);
   const monthRevenue = salesThisMonth.reduce((s, x) => s + x.total, 0);
   const monthProfit = salesThisMonth.reduce((s, x) => s + (x.total - x.items.reduce((a, i) => a + (i.cost || 0) * i.qty, 0)), 0);
-  // Real daily trend built from actual sales, last 14 days — replaces what used to be a static mock chart.
-  const trendDays = Array.from({ length: 14 }, (_, i) => {
-    const d = new Date(); d.setDate(d.getDate() - (13 - i));
-    return d.toISOString().slice(0, 10);
-  });
-  const revenueTrend = trendDays.map(date => {
-    const daySales = sales.filter(x => x.date === date);
-    return {
-      day: date.slice(5), // MM-DD
-      revenue: daySales.reduce((s, x) => s + x.total, 0),
-      profit: daySales.reduce((s, x) => s + (x.total - x.items.reduce((a, i) => a + (i.cost || 0) * i.qty, 0)), 0),
-    };
-  });
+  // Real trend, computed from actual sales — granularity is user-selectable (Daily/Weekly/Monthly).
+  const [trendView, setTrendView] = useState('daily');
+  const cogsOf = (sale) => sale.items.reduce((a, i) => a + (i.cost || 0) * i.qty, 0);
+  const revenueTrend = (() => {
+    if (trendView === 'daily') {
+      return Array.from({ length: 14 }, (_, i) => {
+        const d = new Date(); d.setDate(d.getDate() - (13 - i));
+        const key = d.toISOString().slice(0, 10);
+        const daySales = sales.filter(x => x.date === key);
+        return { label: key.slice(5), revenue: daySales.reduce((s, x) => s + x.total, 0), profit: daySales.reduce((s, x) => s + (x.total - cogsOf(x)), 0) };
+      });
+    }
+    if (trendView === 'weekly') {
+      return Array.from({ length: 12 }, (_, i) => {
+        const end = new Date(); end.setDate(end.getDate() - (11 - i) * 7);
+        const start = new Date(end); start.setDate(start.getDate() - 6);
+        const startKey = start.toISOString().slice(0, 10), endKey = end.toISOString().slice(0, 10);
+        const weekSales = sales.filter(x => x.date >= startKey && x.date <= endKey);
+        return { label: startKey.slice(5), revenue: weekSales.reduce((s, x) => s + x.total, 0), profit: weekSales.reduce((s, x) => s + (x.total - cogsOf(x)), 0) };
+      });
+    }
+    // monthly
+    return Array.from({ length: 12 }, (_, i) => {
+      const d = new Date(); d.setMonth(d.getMonth() - (11 - i)); d.setDate(1);
+      const key = d.toISOString().slice(0, 7);
+      const monthSales = sales.filter(x => (x.date || '').slice(0, 7) === key);
+      return { label: key, revenue: monthSales.reduce((s, x) => s + x.total, 0), profit: monthSales.reduce((s, x) => s + (x.total - cogsOf(x)), 0) };
+    });
+  })();
   const categoryData = CATEGORIES.map(c => ({ name: c, value: products.filter(p => p.category === c).reduce((s, p) => s + p.stockQty * p.costPrice, 0) })).filter(d => d.value > 0);
   const pieColors = [t.accent, t.steel, t.success, t.warning, t.danger, '#8B7FD9', '#4FBFB0', '#C97FB0'];
 
@@ -1213,12 +1230,20 @@ function Dashboard({ t, role, companyInfo, products, sales, customers, suppliers
         <Card t={t} className="p-4 lg:col-span-2">
           <div className="flex items-center justify-between mb-3">
             <h3 className="font-semibold text-sm" style={{ fontFamily: "'Space Grotesk',sans-serif" }}>Revenue & Profit Trend</h3>
-            <Badge t={t} tone="steel">Last 14 days</Badge>
+            <div className="flex gap-1">
+              {[{ id: 'daily', label: 'Daily' }, { id: 'weekly', label: 'Weekly' }, { id: 'monthly', label: 'Monthly' }].map(opt => (
+                <button key={opt.id} onClick={() => setTrendView(opt.id)}
+                  className="px-2.5 py-1 rounded-md text-xs font-medium"
+                  style={{ background: trendView === opt.id ? t.accent : t.surfaceAlt, color: trendView === opt.id ? '#fff' : t.textMuted }}>
+                  {opt.label}
+                </button>
+              ))}
+            </div>
           </div>
           <ResponsiveContainer width="100%" height={230}>
             <LineChart data={revenueTrend}>
               <CartesianGrid stroke={t.chartGrid} strokeDasharray="3 3" />
-              <XAxis dataKey="day" stroke={t.textFaint} fontSize={12} />
+              <XAxis dataKey="label" stroke={t.textFaint} fontSize={12} />
               <YAxis stroke={t.textFaint} fontSize={11} tickFormatter={v => `${(v / 1000000).toFixed(1)}M`} />
               <Tooltip contentStyle={{ background: t.surface, border: `1px solid ${t.border}`, borderRadius: 8, fontSize: 12 }} formatter={v => fmt(v)} />
               <Line type="monotone" dataKey="revenue" stroke={t.accent} strokeWidth={2.5} dot={false} name="Revenue" />
@@ -2696,9 +2721,29 @@ function ReportTable({ t, title, head, rows, footer }) {
 }
 
 /* ============================== USERS & SECURITY ============================== */
-function UsersSecurity({ t, users, refetchUsers, permissions, setPermissions, auditLog, currentUser, notify, logAudit }) {
+function UsersSecurity({ t, users, refetchUsers, permissions, setPermissions, auditLog, setAuditLog, refetchAuditLog, currentUser, notify, logAudit, setConfirm }) {
   const roles = Object.keys(permissions);
   const isOwner = !!currentUser?.isOwner;
+  const [clearingAudit, setClearingAudit] = useState(false);
+
+  const clearAuditLog = async () => {
+    setClearingAudit(true);
+    try {
+      await api.clearAuditLog();
+      await refetchAuditLog();
+      notify('Audit log cleared.');
+    } catch (err) {
+      notify(err.message, 'error');
+    } finally {
+      setClearingAudit(false);
+    }
+  };
+  const confirmClearAuditLog = () => setConfirm({
+    title: 'Clear audit log',
+    message: 'This permanently deletes every existing audit log entry from the database — not just from this screen. This cannot be undone. One new entry recording this clear (and who did it) will remain.',
+    confirmLabel: 'Clear Permanently',
+    onConfirm: clearAuditLog,
+  });
   const [editingUser, setEditingUser] = useState(null); // null = closed, 'new' = create, or a user object = edit
   const [savingUser, setSavingUser] = useState(false);
   const VALID_ROLES = ['Admin', 'Manager', 'Sales', 'Inventory', 'Accountant'];
@@ -2820,7 +2865,10 @@ function UsersSecurity({ t, users, refetchUsers, permissions, setPermissions, au
       </Card>
 
       <Card t={t} className="p-4 overflow-x-auto">
-        <h3 className="font-semibold text-sm mb-3" style={{ fontFamily: "'Space Grotesk',sans-serif" }}>Audit Log</h3>
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="font-semibold text-sm" style={{ fontFamily: "'Space Grotesk',sans-serif" }}>Audit Log</h3>
+          {isOwner && <Btn t={t} variant="danger" onClick={confirmClearAuditLog} disabled={clearingAudit}>{clearingAudit ? 'Clearing…' : 'Clear Audit Log'}</Btn>}
+        </div>
         <table className="w-full text-sm">
           <thead><tr style={{ borderBottom: `1px solid ${t.border}` }}>{['Date/Time', 'User', 'Role', 'Action', 'Module', 'Before', 'After'].map(h => <th key={h} className="text-left px-3 py-2 font-medium" style={{ color: t.textFaint, fontSize: 12 }}>{h}</th>)}</tr></thead>
           <tbody>
@@ -3374,12 +3422,10 @@ function EmptyRow({ t }) { return <div className="px-3 py-3 text-xs text-center"
  * openingStock + stockIn - stockOut, so it can never drift from what actually happened.
  */
 function computeStockRow(product, movements, dateFrom, dateTo) {
-  const rangeStartKey = `${dateFrom} 00:00`;
-  const rangeEndKey = `${dateTo} 23:59`;
   const productMovements = movements.filter(m => m.productId === product.id);
 
-  const before = productMovements.filter(m => m.date < rangeStartKey).sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
-  const inRange = productMovements.filter(m => m.date >= rangeStartKey && m.date <= rangeEndKey);
+  const before = productMovements.filter(m => m.date < dateFrom).sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+  const inRange = productMovements.filter(m => m.date >= dateFrom && m.date <= dateTo);
 
   const openingStock = before.length ? before[before.length - 1].balanceAfter : 0;
   const stockIn = inRange.filter(m => m.qtyChange > 0).reduce((s, m) => s + m.qtyChange, 0);
