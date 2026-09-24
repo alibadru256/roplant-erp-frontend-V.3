@@ -218,6 +218,7 @@ const api = {
   adjustStock: (id, body) => apiRequest(`/products/${id}/adjust`, { method: 'POST', body }),
   listMovements: (params = {}) => apiRequest(`/products/movements/all?${new URLSearchParams(params)}`),
   getProductQr: (id) => apiRequest(`/barcode/${id}/qr`),
+  setProductStatus: (id, active) => apiRequest(`/products/${id}/status`, { method: 'PUT', body: { active } }),
 
   listReturns: (params = {}) => apiRequest(`/returns?${new URLSearchParams(params)}`),
   createReturn: (body) => apiRequest('/returns', { method: 'POST', body }),
@@ -1105,7 +1106,7 @@ export default function App() {
           {activeModule === 'purchasing' && <Purchasing {...ctx} suppliers={suppliers} products={products} purchaseOrders={purchaseOrders} refetchPurchaseOrders={refetchPurchaseOrders} refetchProducts={refetchProducts} refetchSuppliers={refetchSuppliers} refetchMovements={refetchMovements} />}
           {activeModule === 'customers' && <Customers {...ctx} customers={customers} setCustomers={setCustomers} refetchCustomers={refetchCustomers} sales={sales} setSales={setSales} refetchSales={refetchSales} />}
           {activeModule === 'suppliers' && <Suppliers {...ctx} suppliers={suppliers} refetchSuppliers={refetchSuppliers} purchaseOrders={purchaseOrders} />}
-          {activeModule === 'returns' && <ReturnsModule {...ctx} products={products} refetchProducts={refetchProducts} sales={sales} customers={customers} refetchCustomers={refetchCustomers} suppliers={suppliers} refetchSuppliers={refetchSuppliers} returns={returns} refetchReturns={refetchReturns} />}
+          {activeModule === 'returns' && <ReturnsModule {...ctx} products={products} refetchProducts={refetchProducts} refetchMovements={refetchMovements} sales={sales} customers={customers} refetchCustomers={refetchCustomers} suppliers={suppliers} refetchSuppliers={refetchSuppliers} returns={returns} refetchReturns={refetchReturns} />}
           {activeModule === 'reports' && <Reports {...ctx} products={products} sales={sales} purchaseOrders={purchaseOrders} customers={customers} suppliers={suppliers} movements={movements} returns={returns} />}
           {activeModule === 'users' && <UsersSecurity {...ctx} users={users} refetchUsers={refetchUsers} permissions={permissions} setPermissions={setPermissions} auditLog={auditLog} setAuditLog={setAuditLog} refetchAuditLog={refetchAuditLog} />}
           {activeModule === 'settings' && <SettingsPage {...ctx} companyInfo={companyInfo} setCompanyInfo={setCompanyInfo} />}
@@ -1308,7 +1309,7 @@ function Dashboard({ t, role, companyInfo, products, sales, customers, suppliers
 }
 
 /* ============================== INVENTORY ============================== */
-function Inventory({ t, products, setProducts, movements, companyInfo, notify, logAudit, addMovement, role }) {
+function Inventory({ t, products, setProducts, productsLoading, refetchProducts, movements, companyInfo, notify, logAudit, addMovement, role, currentUser, setConfirm }) {
   const [search, setSearch] = useState('');
   const [category, setCategory] = useState('All');
   const [modal, setModal] = useState(null); // 'add' | product for edit
@@ -1316,13 +1317,56 @@ function Inventory({ t, products, setProducts, movements, companyInfo, notify, l
   const [qrProduct, setQrProduct] = useState(null);
   const [qrData, setQrData] = useState(null);
   const [qrLoading, setQrLoading] = useState(false);
+  const [showInactive, setShowInactive] = useState(false);
+  const [inactiveProducts, setInactiveProducts] = useState([]);
+  const [statusChangingId, setStatusChangingId] = useState(null);
   const canEdit = ['Admin', 'Manager', 'Inventory'].includes(role);
+  const isOwner = !!currentUser?.isOwner;
 
-  const openQr = async (product) => {
-    setQrProduct(product);
+  // Deactivated products are kept OUT of the shared `products` state (which POS, Purchasing,
+  // Dashboard, etc. all read) so they can never accidentally show up or be sold anywhere else
+  // in the app. "Show deactivated" only loads them into a separate, Inventory-local list —
+  // hidden by default, one click to reveal, and it never touches the active data other
+  // screens are using.
+  useEffect(() => {
+    if (!showInactive) { setInactiveProducts([]); return; }
+    api.listProducts({ pageSize: 200, includeInactive: 'true' })
+      .then((data) => setInactiveProducts(data.products.map(productFromApi).filter(p => p.active === false)))
+      .catch((err) => notify(err.message, 'error'));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showInactive]);
+
+  const toggleProductStatus = async (p) => {
+    setStatusChangingId(p.id);
+    try {
+      const nextActive = !p.active;
+      const { product } = await api.setProductStatus(p.id, nextActive);
+      const mapped = productFromApi(product);
+      if (nextActive) {
+        // Reactivated: move it back into the shared active list, drop it from the local inactive list.
+        setProducts(prev => prev.some(row => row.id === mapped.id) ? prev.map(row => row.id === mapped.id ? mapped : row) : [...prev, mapped]);
+        setInactiveProducts(prev => prev.filter(row => row.id !== mapped.id));
+      } else {
+        // Deactivated: pull it out of the shared active list immediately so POS/Purchasing/etc.
+        // can no longer see or sell it, and (if the toggle is on) show it in the local inactive list.
+        setProducts(prev => prev.filter(row => row.id !== mapped.id));
+        setInactiveProducts(prev => showInactive ? [...prev.filter(row => row.id !== mapped.id), mapped] : prev);
+      }
+      logAudit({ action: `${nextActive ? 'Reactivated' : 'Deactivated'} product ${mapped.name}`, module: 'Products & Inventory' });
+      notify(`"${mapped.name}" ${nextActive ? 'reactivated' : 'deactivated'}.`);
+    } catch (err) {
+      notify(err.message, 'error');
+    } finally {
+      setStatusChangingId(null);
+    }
+  };
+
+  const openQr = async (p) => {
+    setQrProduct(p);
+    setQrData(null);
     setQrLoading(true);
     try {
-      const data = await api.getProductQr(product.id);
+      const data = await api.getProductQr(p.id);
       setQrData(data);
     } catch (err) {
       notify(err.message, 'error');
@@ -1332,7 +1376,7 @@ function Inventory({ t, products, setProducts, movements, companyInfo, notify, l
     }
   };
 
-  const filtered = products.filter(p =>
+  const filtered = [...products, ...(showInactive ? inactiveProducts : [])].filter(p =>
     (category === 'All' || p.category === category) &&
     (p.name.toLowerCase().includes(search.toLowerCase()) || p.sku.toLowerCase().includes(search.toLowerCase()) || p.partNumber.toLowerCase().includes(search.toLowerCase()))
   );
@@ -1381,6 +1425,12 @@ function Inventory({ t, products, setProducts, movements, companyInfo, notify, l
         <TSelect t={t} value={category} onChange={e => setCategory(e.target.value)} style={{ width: 200 }}>
           <option>All</option>{CATEGORIES.map(c => <option key={c}>{c}</option>)}
         </TSelect>
+        {isOwner && (
+          <label className="flex items-center gap-2 px-3 py-2 rounded-md text-sm" style={{ background: t.surfaceAlt, border: `1px solid ${t.border}`, color: t.textMuted }}>
+            <input type="checkbox" checked={showInactive} onChange={e => setShowInactive(e.target.checked)} />
+            Show deactivated
+          </label>
+        )}
       </div>
 
       <Card t={t} className="overflow-x-auto">
@@ -1400,7 +1450,10 @@ function Inventory({ t, products, setProducts, movements, companyInfo, notify, l
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-2.5">
                       <ProductThumb t={t} product={p} size={36} />
-                      <div><div className="font-medium">{p.name}</div><div className="text-xs" style={{ color: t.textFaint }}>{p.compatibility}</div></div>
+                      <div>
+                        <div className="font-medium flex items-center gap-1.5">{p.name}{p.active === false && <Badge t={t} tone="danger">Inactive</Badge>}</div>
+                        <div className="text-xs" style={{ color: t.textFaint }}>{p.compatibility}</div>
+                      </div>
                     </div>
                   </td>
                   <td className="px-4 py-3" style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 12.5 }}>{p.sku}<br /><span style={{ color: t.textFaint }}>{p.partNumber}</span></td>
@@ -1414,8 +1467,26 @@ function Inventory({ t, products, setProducts, movements, companyInfo, notify, l
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-1.5">
                       <button title="Stock history" onClick={() => setHistoryProduct(p)}><History size={15} style={{ color: t.textFaint }} /></button>
-                      <button title="Print QR / barcode label" onClick={() => openQr(p)}><QrCode size={15} style={{ color: t.textFaint }} /></button>
+                      <button title="QR / barcode label" onClick={() => openQr(p)}><QrCode size={15} style={{ color: t.textFaint }} /></button>
                       {canEdit && <button title="Edit" onClick={() => setModal(p)}><Pencil size={15} style={{ color: t.textFaint }} /></button>}
+                      {isOwner && (
+                        <button
+                          title={p.active === false ? 'Reactivate' : 'Deactivate'}
+                          disabled={statusChangingId === p.id}
+                          onClick={() => setConfirm({
+                            title: p.active === false ? 'Reactivate product' : 'Deactivate product',
+                            message: p.active === false
+                              ? `"${p.name}" will become visible again in Inventory, POS and reports.`
+                              : `"${p.name}" will be hidden from Inventory, POS and new transactions. Its sales/purchase history is kept intact. You can reactivate it any time from "Show deactivated".`,
+                            confirmLabel: p.active === false ? 'Reactivate' : 'Deactivate',
+                            onConfirm: () => toggleProductStatus(p),
+                          })}
+                        >
+                          {p.active === false
+                            ? <CheckCircle2 size={15} style={{ color: t.success }} />
+                            : <Trash2 size={15} style={{ color: t.danger }} />}
+                        </button>
+                      )}
                     </div>
                   </td>
                 </tr>
@@ -1427,7 +1498,29 @@ function Inventory({ t, products, setProducts, movements, companyInfo, notify, l
       </Card>
 
       {modal && (
-        <ProductModal t={t} initial={modal === 'add' ? null : modal} onClose={() => setModal(null)} onSave={saveProduct} isNew={modal === 'add'} />
+        <ProductModal t={t} initial={modal === 'add' ? null : modal} onClose={() => setModal(null)} onSave={saveProduct} isNew={modal === 'add'} products={products} />
+      )}
+
+      {qrProduct && (
+        <Modal t={t} title={`QR / Barcode — ${qrProduct.name}`} onClose={() => { setQrProduct(null); setQrData(null); }}>
+          <div id="print-area" className="flex flex-col items-center gap-3 py-2">
+            {qrLoading && <div className="text-sm" style={{ color: t.textFaint }}>Generating…</div>}
+            {qrData && (
+              <>
+                <div className="p-3 rounded-md bg-white" dangerouslySetInnerHTML={{ __html: qrData.qrSvg }} />
+                <div className="text-center">
+                  <div className="font-medium">{qrData.name}</div>
+                  <div className="text-xs" style={{ color: t.textFaint, fontFamily: "'JetBrains Mono',monospace" }}>SKU: {qrData.sku}{qrData.barcode ? ` · ${qrData.barcode}` : ''}</div>
+                </div>
+              </>
+            )}
+          </div>
+          {qrData && (
+            <div className="flex justify-end mt-4">
+              <Btn t={t} variant="primary" icon={Printer} onClick={() => window.print()}>Print Label</Btn>
+            </div>
+          )}
+        </Modal>
       )}
 
       {historyProduct && (
@@ -1455,32 +1548,21 @@ function Inventory({ t, products, setProducts, movements, companyInfo, notify, l
           </div>
         </Modal>
       )}
-
-      {qrProduct && (
-        <Modal t={t} title={`QR / Barcode — ${qrProduct.name}`} onClose={() => { setQrProduct(null); setQrData(null); }}
-          footer={<Btn t={t} variant="primary" icon={Printer} disabled={qrLoading || !qrData} onClick={() => window.print()}>Print Label</Btn>}>
-          {qrLoading && <p className="text-sm" style={{ color: t.textMuted }}>Generating…</p>}
-          {qrData && (
-            <div id="print-area" className="flex flex-col items-center gap-2 p-4 rounded-md" style={{ background: '#fff' }}>
-              <div dangerouslySetInnerHTML={{ __html: qrData.qrSvg }} />
-              <div className="text-center" style={{ color: '#000' }}>
-                <div className="text-sm font-semibold">{qrData.name}</div>
-                <div className="text-xs" style={{ fontFamily: "'JetBrains Mono',monospace" }}>{qrData.sku} · {qrData.barcode}</div>
-              </div>
-            </div>
-          )}
-          <p className="text-xs mt-3" style={{ color: t.textFaint }}>Scanning this at POS or during receiving looks up this exact product — safe to print and stick on the item or its shelf.</p>
-        </Modal>
-      )}
     </div>
   );
 }
 
-function ProductModal({ t, initial, onClose, onSave, isNew }) {
+function ProductModal({ t, initial, onClose, onSave, isNew, products }) {
   const [form, setForm] = useState(initial || {
-    name: '', category: CATEGORIES[0], brand: BRANDS[0], compatibility: '', costPrice: 0, sellPrice: 0, stockQty: 0, reorderLevel: 5, maxStock: 30, location: LOCATIONS[0], partNumber: '', image: '',
+    name: '', category: '', brand: '', compatibility: '', costPrice: 0, sellPrice: 0, stockQty: 0, reorderLevel: 5, maxStock: 30, location: LOCATIONS[0], partNumber: '', image: '',
   });
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
+
+  // Free-text Category/Brand (so a new one can always be typed) that still suggests every
+  // value already used across real inventory, like an autocomplete — combined with the
+  // starter constants so the list isn't empty before any products exist.
+  const categoryOptions = [...new Set([...CATEGORIES, ...(products || []).map(p => p.category).filter(Boolean)])].sort();
+  const brandOptions = [...new Set([...BRANDS, ...(products || []).map(p => p.brand).filter(Boolean)])].sort();
   return (
     <Modal t={t} title={isNew ? 'Add Product' : `Edit — ${form.name}`} onClose={onClose} wide
       footer={<>
@@ -1511,8 +1593,14 @@ function ProductModal({ t, initial, onClose, onSave, isNew }) {
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <Field t={t} label="Product Name *"><TInput t={t} value={form.name} onChange={e => set('name', e.target.value)} placeholder="e.g. Cylinder Head Gasket" /></Field>
         <Field t={t} label="Manufacturer Part Number"><TInput t={t} value={form.partNumber} onChange={e => set('partNumber', e.target.value)} placeholder="e.g. MF-3610245" /></Field>
-        <Field t={t} label="Category *"><TSelect t={t} value={form.category} onChange={e => set('category', e.target.value)}>{CATEGORIES.map(c => <option key={c}>{c}</option>)}</TSelect></Field>
-        <Field t={t} label="Brand *"><TSelect t={t} value={form.brand} onChange={e => set('brand', e.target.value)}>{BRANDS.map(b => <option key={b}>{b}</option>)}</TSelect></Field>
+        <Field t={t} label="Category *">
+          <TInput t={t} list="category-options" value={form.category} onChange={e => set('category', e.target.value)} placeholder="Type or pick a category" />
+          <datalist id="category-options">{categoryOptions.map(c => <option key={c} value={c} />)}</datalist>
+        </Field>
+        <Field t={t} label="Brand *">
+          <TInput t={t} list="brand-options" value={form.brand} onChange={e => set('brand', e.target.value)} placeholder="Type or pick a brand" />
+          <datalist id="brand-options">{brandOptions.map(b => <option key={b} value={b} />)}</datalist>
+        </Field>
         <Field t={t} label="Compatibility"><TInput t={t} value={form.compatibility} onChange={e => set('compatibility', e.target.value)} placeholder="e.g. MF 240, MF 375" /></Field>
         <Field t={t} label="Storage Location"><TSelect t={t} value={form.location} onChange={e => set('location', e.target.value)}>{LOCATIONS.map(l => <option key={l}>{l}</option>)}</TSelect></Field>
         <Field t={t} label="Cost Price *"><TInput t={t} type="number" value={form.costPrice} onChange={e => set('costPrice', +e.target.value)} /></Field>
@@ -1589,8 +1677,7 @@ function POS({ t, products, setProducts, refetchProducts, refetchMovements, cust
         paymentMethod: sale.payment_method, status: sale.status, servedBy: sale.servedBy,
       };
       setSales(prev => [receiptData, ...prev]);
-      await refetchProducts(); // stock was deducted server-side; reload real quantities rather than guessing locally
-      await refetchMovements(); // Stock Management's Stock In/Out reads from this — must refresh or it stays stale until next login
+      await Promise.all([refetchProducts(), refetchMovements()]); // stock was deducted server-side; reload real quantities/ledger rather than guessing locally
       logAudit({ action: `Completed sale ${sale.invoice_no}`, module: 'POS', before: '-', after: money(Number(sale.total), companyInfo.currency) });
       notify(`Sale ${sale.invoice_no} completed successfully.`);
       setReceipt(receiptData);
@@ -2568,7 +2655,7 @@ function Suppliers({ t, suppliers, refetchSuppliers, purchaseOrders, companyInfo
 }
 
 /* ============================== RETURNS ============================== */
-function ReturnsModule({ t, products, refetchProducts, sales, customers, refetchCustomers, suppliers, refetchSuppliers, returns, refetchReturns, companyInfo, notify, logAudit }) {
+function ReturnsModule({ t, products, refetchProducts, refetchMovements, sales, customers, refetchCustomers, suppliers, refetchSuppliers, returns, refetchReturns, companyInfo, notify, logAudit }) {
   const [tab, setTab] = useState('customer');
   const [submitting, setSubmitting] = useState(false);
   const [form, setForm] = useState({ productId: products[0]?.id, qty: 1, reason: '', condition: 'Resellable', customerId: customers[0]?.id, supplierId: suppliers[0]?.id });
@@ -2584,7 +2671,7 @@ function ReturnsModule({ t, products, refetchProducts, sales, customers, refetch
         customerId: tab === 'customer' ? +form.customerId : undefined,
         supplierId: tab === 'supplier' ? +form.supplierId : undefined,
       });
-      await Promise.all([refetchProducts(), refetchReturns(), tab === 'customer' ? refetchCustomers() : refetchSuppliers()]);
+      await Promise.all([refetchProducts(), refetchReturns(), refetchMovements(), tab === 'customer' ? refetchCustomers() : refetchSuppliers()]);
       logAudit({ action: `Processed ${tab} return ${created.ref_no}`, module: 'Returns', before: '-', after: `Qty: ${form.qty}` });
       notify(`${tab === 'customer' ? 'Customer' : 'Supplier'} return ${created.ref_no} processed.`);
       setForm(f => ({ ...f, qty: 1, reason: '' }));
@@ -3603,7 +3690,7 @@ function StockManagement({ t, products, setProducts, movements, addMovement, com
       </Card>
 
       {editingProduct && canEditPrices && (
-        <ProductModal t={t} initial={editingProduct} isNew={false} onClose={() => setEditingProduct(null)} onSave={savePriceEdit} />
+        <ProductModal t={t} initial={editingProduct} isNew={false} onClose={() => setEditingProduct(null)} onSave={savePriceEdit} products={products} />
       )}
     </div>
   );
