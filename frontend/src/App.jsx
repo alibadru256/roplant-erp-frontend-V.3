@@ -95,6 +95,76 @@ async function apiRequest(path, { method = 'GET', body, auth = true, retry = tru
   return data;
 }
 
+function userFromApi(row) {
+  return {
+    id: row.id, name: row.name, email: row.email, role: row.role, status: row.status,
+    isOwner: row.is_owner, lastLogin: row.last_login_at ? row.last_login_at.replace('T', ' ').slice(0, 16) : 'Never',
+  };
+}
+
+function auditLogFromApi(row) {
+  return {
+    id: row.id, date: (row.created_at || '').replace('T', ' ').slice(0, 19), user: row.user_name || '—',
+    role: row.role || '—', action: row.action, module: row.module,
+    before: row.before_value || '', after: row.after_value || '',
+  };
+}
+
+function quotationFromApi(row) {
+  return {
+    id: row.id, docNo: row.doc_no, customerId: row.customer_id, customerName: row.customer_name,
+    deliverTo: row.deliver_to || '', account: row.account || '', yourReference: row.your_reference || '',
+    taxExempt: row.tax_exempt, expiry: row.expiry ? String(row.expiry).slice(0, 10) : '',
+    date: (row.created_at || '').slice(0, 10),
+    items: (row.items || []).map(i => ({ code: i.code, description: i.description, qty: i.qty, unitPrice: Number(i.unitPrice), discPct: Number(i.discPct || 0) })),
+    subtotal: Number(row.subtotal), tax: Number(row.tax), total: Number(row.total),
+  };
+}
+
+function returnFromApi(row) {
+  return {
+    id: row.id, refNo: row.ref_no, type: row.type, productId: row.product_id, productName: row.product_name,
+    partyName: row.party_name, qty: row.qty, reason: row.reason, condition: row.condition,
+    date: (row.created_at || '').slice(0, 10), creditNoteNo: row.credit_note_no, debitNoteNo: row.debit_note_no,
+  };
+}
+
+function movementFromApi(row) {
+  return {
+    id: row.id, date: (row.created_at || '').slice(0, 10), productId: row.product_id,
+    productName: row.product_name, type: row.type, qtyChange: row.qty_change,
+    balanceBefore: row.balance_before, balanceAfter: row.balance_after,
+    reference: row.reference || '', reason: row.reason || '', userName: row.user_name,
+  };
+}
+
+function customerFromApi(row) {
+  return {
+    id: row.id, customerCode: row.customer_code, name: row.name, phone: row.phone || '',
+    email: row.email || '', address: row.address || '', creditLimit: Number(row.credit_limit),
+    balance: Number(row.balance), openingBalance: Number(row.opening_balance), isActive: row.is_active,
+    updatedAt: row.updated_at, createdAt: row.created_at,
+  };
+}
+
+function supplierFromApi(row) {
+  return {
+    id: row.id, supplierCode: row.supplier_code, name: row.name, phone: row.phone || '',
+    email: row.email || '', address: row.address || '', balance: Number(row.balance),
+    openingBalance: Number(row.opening_balance), isActive: row.is_active,
+    updatedAt: row.updated_at, createdAt: row.created_at,
+  };
+}
+
+function purchaseOrderFromApi(row) {
+  return {
+    id: row.id, poNo: row.po_no, supplierId: row.supplier_id, supplierName: row.supplier_name,
+    status: row.status, total: Number(row.total), grnNo: row.grn_no,
+    items: (row.items || []).map(i => ({ id: i.id, productId: i.productId, qtyOrdered: i.qtyOrdered, qtyReceived: i.qtyReceived, unitCost: Number(i.unitCost) })),
+    createdAt: row.created_at, receivedAt: row.received_at,
+  };
+}
+
 function saleFromApi(row) {
   return {
     id: row.id, invoiceNo: row.invoice_no, date: (row.created_at || '').slice(0, 10),
@@ -111,7 +181,7 @@ function productFromApi(row) {
     name: row.name, category: row.category, brand: row.brand || '', compatibility: row.compatibility || '',
     costPrice: Number(row.cost_price), sellPrice: Number(row.sell_price), stockQty: row.stock_qty,
     reorderLevel: row.reorder_level, maxStock: row.max_stock, primarySupplierId: row.primary_supplier_id,
-    rack: row.rack || '', shelfBin: row.shelf_bin || '', image: row.image || '', active: row.active,
+    rack: row.rack || '', shelfBin: row.shelf_bin || '', location: row.rack || '', image: row.image || '', active: row.active,
     updatedAt: row.updated_at, createdAt: row.created_at,
   };
 }
@@ -137,6 +207,7 @@ function settingsToApi(ci) {
 const api = {
   login: (username, password) => apiRequest('/auth/login', { method: 'POST', body: { email: username, password }, auth: false }),
   logout: (refreshToken) => apiRequest('/auth/logout', { method: 'POST', body: { refreshToken } }).catch(() => {}),
+  logoutAllDevices: () => apiRequest('/auth/logout-all', { method: 'POST' }),
   me: () => apiRequest('/auth/me'),
 
   dashboard: () => apiRequest('/dashboard'),
@@ -145,14 +216,45 @@ const api = {
   createProduct: (product) => apiRequest('/products', { method: 'POST', body: product }),
   updateProduct: (id, product) => apiRequest(`/products/${id}`, { method: 'PUT', body: product }),
   adjustStock: (id, body) => apiRequest(`/products/${id}/adjust`, { method: 'POST', body }),
+  listMovements: (params = {}) => apiRequest(`/products/movements/all?${new URLSearchParams(params)}`),
+
+  listReturns: (params = {}) => apiRequest(`/returns?${new URLSearchParams(params)}`),
+  createReturn: (body) => apiRequest('/returns', { method: 'POST', body }),
+
+  listQuotations: (params = {}) => apiRequest(`/quotations?${new URLSearchParams(params)}`),
+  createQuotation: (body) => apiRequest('/quotations', { method: 'POST', body }),
+
+  listUsers: () => apiRequest('/users'),
+  createUser: (body) => apiRequest('/users', { method: 'POST', body }),
+  updateUser: (id, body) => apiRequest(`/users/${id}`, { method: 'PUT', body }),
+  setUserStatus: (id, status) => apiRequest(`/users/${id}/status`, { method: 'PUT', body: { status } }),
+
+  listAuditLog: (params = {}) => apiRequest(`/audit?${new URLSearchParams(params)}`),
 
   listSales: (params = {}) => apiRequest(`/sales?${new URLSearchParams(params)}`),
   createSale: (sale) => apiRequest('/sales', { method: 'POST', body: sale }),
+  correctSaleStatus: (id, status) => apiRequest(`/sales/${id}/status`, { method: 'PUT', body: { status } }),
 
   listCategories: () => apiRequest('/categories'),
 
   getSettings: () => apiRequest('/settings'),
   updateSettings: (settings) => apiRequest('/settings', { method: 'PUT', body: settings }),
+
+  listCustomers: (params = {}) => apiRequest(`/customers?${new URLSearchParams(params)}`),
+  createCustomer: (customer) => apiRequest('/customers', { method: 'POST', body: customer }),
+  updateCustomer: (id, customer) => apiRequest(`/customers/${id}`, { method: 'PUT', body: customer }),
+  deleteCustomer: (id) => apiRequest(`/customers/${id}`, { method: 'DELETE' }),
+  payCustomer: (id, body) => apiRequest(`/customers/${id}/pay`, { method: 'POST', body }),
+
+  listSuppliers: (params = {}) => apiRequest(`/suppliers?${new URLSearchParams(params)}`),
+  createSupplier: (supplier) => apiRequest('/suppliers', { method: 'POST', body: supplier }),
+  updateSupplier: (id, supplier) => apiRequest(`/suppliers/${id}`, { method: 'PUT', body: supplier }),
+  deleteSupplier: (id) => apiRequest(`/suppliers/${id}`, { method: 'DELETE' }),
+  paySupplier: (id, body) => apiRequest(`/suppliers/${id}/pay`, { method: 'POST', body }),
+
+  listPurchaseOrders: (params = {}) => apiRequest(`/purchasing?${new URLSearchParams(params)}`),
+  createPurchaseOrder: (po) => apiRequest('/purchasing', { method: 'POST', body: po }),
+  receivePurchaseOrder: (id, body) => apiRequest(`/purchasing/${id}/receive`, { method: 'POST', body }),
 };
 
 /* ============================== MOCK DATA ============================== */
@@ -840,9 +942,50 @@ export default function App() {
     refetchProducts();
   }, [currentUser]);
 
+  const refetchSales = () => api.listSales({ pageSize: 200 }).then((data) => setSales(data.sales.map(saleFromApi))).catch((err) => notify(err.message, 'error'));
+  useEffect(() => { if (currentUser) refetchSales(); }, [currentUser]);
+
+  const refetchCustomers = () => api.listCustomers({ pageSize: 200 }).then((data) => setCustomers(data.customers.map(customerFromApi))).catch((err) => notify(err.message, 'error'));
+  useEffect(() => { if (currentUser) refetchCustomers(); }, [currentUser]);
+
+  const refetchSuppliers = () => api.listSuppliers({ pageSize: 200 }).then((data) => setSuppliers(data.suppliers.map(supplierFromApi))).catch((err) => notify(err.message, 'error'));
+  useEffect(() => { if (currentUser) refetchSuppliers(); }, [currentUser]);
+
+  const refetchPurchaseOrders = () => api.listPurchaseOrders({ pageSize: 200 }).then((data) => setPurchaseOrders(data.purchaseOrders.map(purchaseOrderFromApi))).catch((err) => notify(err.message, 'error'));
+  useEffect(() => { if (currentUser) refetchPurchaseOrders(); }, [currentUser]);
+
+  const refetchMovements = () => api.listMovements({ pageSize: 300 }).then((data) => setMovements(data.movements.map(movementFromApi))).catch((err) => notify(err.message, 'error'));
+  useEffect(() => { if (currentUser) refetchMovements(); }, [currentUser]);
+
+  const refetchReturns = () => api.listReturns({ pageSize: 200 }).then((data) => setReturns(data.returns.map(returnFromApi))).catch((err) => notify(err.message, 'error'));
+  useEffect(() => { if (currentUser) refetchReturns(); }, [currentUser]);
+
+  const refetchQuotations = () => api.listQuotations({ pageSize: 200 }).then((data) => setQuotations(data.quotations.map(quotationFromApi))).catch((err) => notify(err.message, 'error'));
+  useEffect(() => { if (currentUser) refetchQuotations(); }, [currentUser]);
+
+  const refetchUsers = () => { if (role !== 'Admin') return; return api.listUsers().then((data) => setUsers(data.users.map(userFromApi))).catch((err) => notify(err.message, 'error')); };
+  useEffect(() => { if (currentUser) refetchUsers(); }, [currentUser]);
+
+  const refetchAuditLog = () => { if (!['Admin', 'Manager'].includes(role)) return; return api.listAuditLog().then((data) => setAuditLog(data.auditLog.map(auditLogFromApi))).catch((err) => notify(err.message, 'error')); };
+  useEffect(() => { if (currentUser) refetchAuditLog(); }, [currentUser]);
+
+  /**
+   * Multi-user consistency: without this, two people logged in at the same time would each
+   * be looking at a snapshot from whenever THEY logged in — so User A selling the last unit
+   * of a product wouldn't be visible to User B until B happened to refresh, creating a real
+   * overselling risk. Two mechanisms, both standard practice for this without building full
+   * real-time infrastructure: refetch the moment a tab regains focus (covers "switched away
+   * and came back"), and poll stock levels every 20 seconds in the background (covers "left
+   * the tab open and someone else sold the last unit while I was looking at it"). Products
+   * poll fastest since that's the actual overselling risk; the rest refresh on focus only,
+   * which is enough for data that isn't checked unit-by-unit before an action.
+   */
   useEffect(() => {
     if (!currentUser) return;
-    api.listSales({ pageSize: 200 }).then((data) => setSales(data.sales.map(saleFromApi))).catch((err) => notify(err.message, 'error'));
+    const onFocus = () => { refetchProducts(); refetchSales(); refetchCustomers(); refetchSuppliers(); refetchPurchaseOrders(); };
+    window.addEventListener('focus', onFocus);
+    const stockPoll = setInterval(refetchProducts, 20000);
+    return () => { window.removeEventListener('focus', onFocus); clearInterval(stockPoll); };
   }, [currentUser]);
 
   useEffect(() => {
@@ -877,7 +1020,7 @@ export default function App() {
     setActiveModule('dashboard');
   };
 
-  const ctx = { t, theme, role, currentUser, companyInfo, notify, setConfirm, logAudit, addMovement, setActiveModule, permissions, setPermissions, users, setUsers };
+  const ctx = { t, theme, role, currentUser, companyInfo, notify, setConfirm, logAudit, addMovement, setActiveModule, permissions, setPermissions, users, setUsers, logout };
 
   return (
     <div style={{ fontFamily: "'Inter',sans-serif", background: t.bg, color: t.text, minHeight: '600px' }} className="w-full flex rounded-xl overflow-hidden">
@@ -952,17 +1095,17 @@ export default function App() {
         <main className="flex-1 overflow-y-auto p-4 md:p-6" style={{ background: t.bg }}>
           {activeModule === 'dashboard' && <Dashboard {...ctx} products={products} sales={sales} customers={customers} suppliers={suppliers} />}
           {activeModule === 'inventory' && <Inventory {...ctx} products={products} setProducts={setProducts} productsLoading={productsLoading} refetchProducts={refetchProducts} movements={movements} />}
-          {activeModule === 'icc' && <InventoryControlCenter {...ctx} products={products} setProducts={setProducts} movements={movements} sales={sales} purchaseOrders={purchaseOrders} suppliers={suppliers} customers={customers} returns={returns} />}
+          {activeModule === 'icc' && <InventoryControlCenter {...ctx} products={products} refetchProducts={refetchProducts} movements={movements} refetchMovements={refetchMovements} sales={sales} purchaseOrders={purchaseOrders} suppliers={suppliers} customers={customers} returns={returns} />}
           {activeModule === 'stockmgmt' && <StockManagement {...ctx} products={products} setProducts={setProducts} movements={movements} />}
           {activeModule === 'pos' && <POS {...ctx} products={products} setProducts={setProducts} refetchProducts={refetchProducts} customers={customers} setCustomers={setCustomers} sales={sales} setSales={setSales} />}
-          {activeModule === 'documents' && <Documents {...ctx} sales={sales} customers={customers} products={products} quotations={quotations} setQuotations={setQuotations} />}
+          {activeModule === 'documents' && <Documents {...ctx} sales={sales} customers={customers} products={products} quotations={quotations} refetchQuotations={refetchQuotations} />}
           {activeModule === 'whatsapp' && <WhatsAppModule {...ctx} customers={customers} sales={sales} />}
-          {activeModule === 'purchasing' && <Purchasing {...ctx} suppliers={suppliers} setSuppliers={setSuppliers} products={products} setProducts={setProducts} purchaseOrders={purchaseOrders} setPurchaseOrders={setPurchaseOrders} />}
-          {activeModule === 'customers' && <Customers {...ctx} customers={customers} setCustomers={setCustomers} sales={sales} setSales={setSales} />}
-          {activeModule === 'suppliers' && <Suppliers {...ctx} suppliers={suppliers} setSuppliers={setSuppliers} purchaseOrders={purchaseOrders} />}
-          {activeModule === 'returns' && <ReturnsModule {...ctx} products={products} setProducts={setProducts} sales={sales} customers={customers} setCustomers={setCustomers} suppliers={suppliers} setSuppliers={setSuppliers} returns={returns} setReturns={setReturns} />}
+          {activeModule === 'purchasing' && <Purchasing {...ctx} suppliers={suppliers} products={products} purchaseOrders={purchaseOrders} refetchPurchaseOrders={refetchPurchaseOrders} refetchProducts={refetchProducts} refetchSuppliers={refetchSuppliers} />}
+          {activeModule === 'customers' && <Customers {...ctx} customers={customers} setCustomers={setCustomers} refetchCustomers={refetchCustomers} sales={sales} setSales={setSales} refetchSales={refetchSales} />}
+          {activeModule === 'suppliers' && <Suppliers {...ctx} suppliers={suppliers} refetchSuppliers={refetchSuppliers} purchaseOrders={purchaseOrders} />}
+          {activeModule === 'returns' && <ReturnsModule {...ctx} products={products} refetchProducts={refetchProducts} sales={sales} customers={customers} refetchCustomers={refetchCustomers} suppliers={suppliers} refetchSuppliers={refetchSuppliers} returns={returns} refetchReturns={refetchReturns} />}
           {activeModule === 'reports' && <Reports {...ctx} products={products} sales={sales} purchaseOrders={purchaseOrders} customers={customers} suppliers={suppliers} movements={movements} returns={returns} />}
-          {activeModule === 'users' && <UsersSecurity {...ctx} users={users} setUsers={setUsers} permissions={permissions} setPermissions={setPermissions} auditLog={auditLog} />}
+          {activeModule === 'users' && <UsersSecurity {...ctx} users={users} refetchUsers={refetchUsers} permissions={permissions} setPermissions={setPermissions} auditLog={auditLog} />}
           {activeModule === 'settings' && <SettingsPage {...ctx} companyInfo={companyInfo} setCompanyInfo={setCompanyInfo} />}
         </main>
       </div>
@@ -983,8 +1126,27 @@ function Dashboard({ t, role, companyInfo, products, sales, customers, suppliers
   const outOfStockCount = products.filter(p => p.stockQty === 0).length;
   const receivables = customers.reduce((s, c) => s + c.balance, 0);
   const payables = suppliers.reduce((s, sup) => s + sup.balance, 0);
-  const monthRevenue = sales.reduce((s, x) => s + x.total, 0) + REVENUE_TREND[REVENUE_TREND.length - 1].revenue;
-  const monthProfit = sales.reduce((s, x) => s + (x.total - x.items.reduce((a, i) => a + i.cost * i.qty, 0)), 0) + REVENUE_TREND[REVENUE_TREND.length - 1].profit;
+  const today = todayStr();
+  const salesToday = sales.filter(x => x.date === today);
+  const revenueToday = salesToday.reduce((s, x) => s + x.total, 0);
+  // Real month-to-date figures — purely from actual sales records, no synthetic numbers mixed in.
+  const monthKey = today.slice(0, 7);
+  const salesThisMonth = sales.filter(x => (x.date || '').slice(0, 7) === monthKey);
+  const monthRevenue = salesThisMonth.reduce((s, x) => s + x.total, 0);
+  const monthProfit = salesThisMonth.reduce((s, x) => s + (x.total - x.items.reduce((a, i) => a + (i.cost || 0) * i.qty, 0)), 0);
+  // Real daily trend built from actual sales, last 14 days — replaces what used to be a static mock chart.
+  const trendDays = Array.from({ length: 14 }, (_, i) => {
+    const d = new Date(); d.setDate(d.getDate() - (13 - i));
+    return d.toISOString().slice(0, 10);
+  });
+  const revenueTrend = trendDays.map(date => {
+    const daySales = sales.filter(x => x.date === date);
+    return {
+      day: date.slice(5), // MM-DD
+      revenue: daySales.reduce((s, x) => s + x.total, 0),
+      profit: daySales.reduce((s, x) => s + (x.total - x.items.reduce((a, i) => a + (i.cost || 0) * i.qty, 0)), 0),
+    };
+  });
   const categoryData = CATEGORIES.map(c => ({ name: c, value: products.filter(p => p.category === c).reduce((s, p) => s + p.stockQty * p.costPrice, 0) })).filter(d => d.value > 0);
   const pieColors = [t.accent, t.steel, t.success, t.warning, t.danger, '#8B7FD9', '#4FBFB0', '#C97FB0'];
 
@@ -1021,12 +1183,12 @@ function Dashboard({ t, role, companyInfo, products, sales, customers, suppliers
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         {canSeeFinancials ? (
           <>
-            <StatCard t={t} label="Revenue (MTD)" value={money(monthRevenue, companyInfo.currency)} sub="12.4% vs last month" icon={TrendingUp} tone="accent" />
-            <StatCard t={t} label="Gross Profit (MTD)" value={money(monthProfit, companyInfo.currency)} sub="8.9% vs last month" icon={Wallet} tone="success" />
+            <StatCard t={t} label="Sales Today" value={money(revenueToday, companyInfo.currency)} sub={`${salesToday.length} transaction${salesToday.length === 1 ? '' : 's'}`} icon={TrendingUp} tone="accent" />
+            <StatCard t={t} label="Gross Profit (MTD)" value={money(monthProfit, companyInfo.currency)} sub={`${salesThisMonth.length} sales this month`} icon={Wallet} tone="success" />
           </>
         ) : (
           <>
-            <StatCard t={t} label="Sales Today" value={sales.filter(s => s.date === todayStr()).length} sub="Transactions completed" icon={TrendingUp} tone="accent" />
+            <StatCard t={t} label="Sales Today" value={salesToday.length} sub="Transactions completed" icon={TrendingUp} tone="accent" />
             <StatCard t={t} label="Total Customers" value={customers.length} sub="On file" icon={Users} tone="success" />
           </>
         )}
@@ -1043,7 +1205,7 @@ function Dashboard({ t, role, companyInfo, products, sales, customers, suppliers
           <StatCard t={t} label="Receivables" value={money(receivables, companyInfo.currency)} sub={`${customers.filter(c => c.balance > 0).length} customers owing`} icon={ArrowUpRight} tone="warning" />
           <StatCard t={t} label="Payables" value={money(payables, companyInfo.currency)} sub={`${suppliers.filter(s => s.balance > 0).length} suppliers owed`} icon={ArrowDownRight} tone="danger" />
           <StatCard t={t} label="Total Products" value={products.length} sub={`${CATEGORIES.length} categories`} icon={ClipboardList} tone="steel" />
-          <StatCard t={t} label="Total Customers" value={customers.length} sub={`${sales.length} sales this session`} icon={Users} tone="accent" />
+          <StatCard t={t} label="Total Customers" value={customers.length} sub={`${sales.length} sales on record`} icon={Users} tone="accent" />
         </div>
       )}
 
@@ -1051,12 +1213,12 @@ function Dashboard({ t, role, companyInfo, products, sales, customers, suppliers
         <Card t={t} className="p-4 lg:col-span-2">
           <div className="flex items-center justify-between mb-3">
             <h3 className="font-semibold text-sm" style={{ fontFamily: "'Space Grotesk',sans-serif" }}>Revenue & Profit Trend</h3>
-            <Badge t={t} tone="steel">Last 6 months</Badge>
+            <Badge t={t} tone="steel">Last 14 days</Badge>
           </div>
           <ResponsiveContainer width="100%" height={230}>
-            <LineChart data={REVENUE_TREND}>
+            <LineChart data={revenueTrend}>
               <CartesianGrid stroke={t.chartGrid} strokeDasharray="3 3" />
-              <XAxis dataKey="month" stroke={t.textFaint} fontSize={12} />
+              <XAxis dataKey="day" stroke={t.textFaint} fontSize={12} />
               <YAxis stroke={t.textFaint} fontSize={11} tickFormatter={v => `${(v / 1000000).toFixed(1)}M`} />
               <Tooltip contentStyle={{ background: t.surface, border: `1px solid ${t.border}`, borderRadius: 8, fontSize: 12 }} formatter={v => fmt(v)} />
               <Line type="monotone" dataKey="revenue" stroke={t.accent} strokeWidth={2.5} dot={false} name="Revenue" />
@@ -1140,13 +1302,13 @@ function Inventory({ t, products, setProducts, movements, companyInfo, notify, l
       if (isNew) {
         const skuNum = String(products.length + 1).padStart(4, '0');
         const prefix = data.category.slice(0, 3).toUpperCase();
-        const { product } = await api.createProduct({ ...data, sku: `${prefix}-${skuNum}` });
+        const { product } = await api.createProduct({ ...data, rack: data.location, sku: `${prefix}-${skuNum}` });
         const mapped = productFromApi(product);
         setProducts(prev => [...prev, mapped]);
         logAudit({ action: `Created product ${mapped.name}`, module: 'Products & Inventory', before: '-', after: `Stock: ${mapped.stockQty}` });
         notify(`Product "${mapped.name}" added with SKU ${mapped.sku}.`);
       } else {
-        const { product } = await api.updateProduct(data.id, { ...data, expectedUpdatedAt: data.updatedAt });
+        const { product } = await api.updateProduct(data.id, { ...data, rack: data.location, expectedUpdatedAt: data.updatedAt });
         const mapped = productFromApi(product);
         setProducts(prev => prev.map(p => p.id === mapped.id ? mapped : p));
         logAudit({ action: `Edited ${mapped.name}`, module: 'Products & Inventory', before: `Sell: ${companyInfo.currency} ${fmt(data.sellPrice)}`, after: `Sell: ${companyInfo.currency} ${fmt(mapped.sellPrice)}` });
@@ -1701,20 +1863,34 @@ function WhatsAppModule({ t, customers, sales, companyInfo, notify, logAudit }) 
   );
 }
 
-function Documents({ t, sales, customers, products, quotations, setQuotations, companyInfo, notify, logAudit, role }) {
+function Documents({ t, sales, customers, products, quotations, refetchQuotations, companyInfo, notify, logAudit, role }) {
   const [tab, setTab] = useState('quotations');
   const [modal, setModal] = useState(false);
   const [viewQuote, setViewQuote] = useState(null);
   const [viewInvoice, setViewInvoice] = useState(null);
   const nextDocNo = 3728 + quotations.length + 1;
 
-  const createQuotation = (q) => {
-    const newQuote = { ...q, id: nextId(), docNo: nextDocNo, date: todayStr(), createdBy: role };
-    setQuotations(prev => [newQuote, ...prev]);
-    logAudit({ action: `Created quotation #${nextDocNo} for ${q.customerName}`, module: 'Documents', before: '-', after: `${money(q.total, companyInfo.currency)}` });
-    notify(`Quotation #${nextDocNo} created.`);
-    setModal(false);
-    setViewQuote(newQuote); // show the finished letterhead immediately, ready to print
+  const [creatingQuote, setCreatingQuote] = useState(false);
+  const createQuotation = async (q) => {
+    setCreatingQuote(true);
+    try {
+      const matchedCustomer = customers.find(c => c.name.toLowerCase() === q.customerName.trim().toLowerCase());
+      const { quotation } = await api.createQuotation({
+        customerId: matchedCustomer?.id, customerName: q.customerName, deliverTo: q.deliverTo,
+        account: q.account, yourReference: q.yourReference, taxExempt: q.taxExempt, expiry: q.expiry,
+        items: q.items,
+      });
+      await refetchQuotations();
+      const mapped = quotationFromApi(quotation);
+      logAudit({ action: `Created quotation #${mapped.docNo} for ${q.customerName}`, module: 'Documents', before: '-', after: money(mapped.total, companyInfo.currency) });
+      notify(`Quotation #${mapped.docNo} created.`);
+      setModal(false);
+      setViewQuote(mapped); // show the finished letterhead immediately, ready to print
+    } catch (err) {
+      notify(err.message, 'error');
+    } finally {
+      setCreatingQuote(false);
+    }
   };
 
   return (
@@ -1780,7 +1956,7 @@ function Documents({ t, sales, customers, products, quotations, setQuotations, c
         </Card>
       )}
 
-      {modal && <QuotationComposer t={t} customers={customers} products={products} companyInfo={companyInfo} nextDocNo={nextDocNo} onClose={() => setModal(false)} onSave={createQuotation} notify={notify} />}
+      {modal && <QuotationComposer t={t} customers={customers} products={products} companyInfo={companyInfo} nextDocNo={nextDocNo} onClose={() => setModal(false)} onSave={createQuotation} notify={notify} saving={creatingQuote} />}
 
       {viewQuote && (
         <Modal t={t} title={`Quotation #${viewQuote.docNo}`} onClose={() => setViewQuote(null)} wide
@@ -1820,7 +1996,7 @@ function Documents({ t, sales, customers, products, quotations, setQuotations, c
  * ProformaDocument (the printed version), so what you build here is exactly what prints.
  * Uses companyInfo.taxRate (not a hardcoded rate) so VAT always matches Settings.
  */
-function QuotationComposer({ t, customers, products, companyInfo, nextDocNo, onClose, onSave, notify }) {
+function QuotationComposer({ t, customers, products, companyInfo, nextDocNo, onClose, onSave, notify, saving }) {
   const [customerName, setCustomerName] = useState('');
   const [deliverTo, setDeliverTo] = useState('');
   const [yourReference, setYourReference] = useState('');
@@ -1844,7 +2020,7 @@ function QuotationComposer({ t, customers, products, companyInfo, nextDocNo, onC
       notify('Every line item needs a description, a positive quantity, and a valid rate.', 'error'); return;
     }
     onSave({
-      customerName, deliverTo, yourReference, expiry, taxExempt: taxExempt ? 'Y' : 'N', account: 'N/A',
+      customerName, deliverTo, yourReference, expiry, taxExempt, account: 'N/A',
       items: items.map(i => ({ code: 'TECH', description: i.description, qty: Number(i.qty), unitPrice: Number(i.unitPrice), discPct: 0 })),
       subtotal, tax, total,
     });
@@ -1854,7 +2030,7 @@ function QuotationComposer({ t, customers, products, companyInfo, nextDocNo, onC
     <Modal t={t} title="New Quotation / Proforma" onClose={onClose} wide
       footer={<>
         <Btn t={t} variant="secondary" onClick={onClose}>Cancel</Btn>
-        <Btn t={t} variant="primary" onClick={save}>Save Quotation</Btn>
+        <Btn t={t} variant="primary" onClick={save} disabled={saving}>{saving ? 'Saving…' : 'Save Quotation'}</Btn>
       </>}>
       <div style={{ background: '#fff', color: '#000', padding: 20, fontFamily: "Georgia, 'Times New Roman', serif", borderRadius: 8 }}>
         <div className="text-center">
@@ -1969,8 +2145,10 @@ function QuotationPrintable({ quote, companyInfo }) {
 }
 
 /* ============================== PURCHASING ============================== */
-function Purchasing({ t, suppliers, setSuppliers, products, setProducts, purchaseOrders, setPurchaseOrders, companyInfo, notify, logAudit, addMovement }) {
+function Purchasing({ t, suppliers, products, purchaseOrders, refetchPurchaseOrders, refetchProducts, refetchSuppliers, companyInfo, notify, logAudit }) {
   const [modal, setModal] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [receivingId, setReceivingId] = useState(null);
   const [form, setForm] = useState({ supplierId: suppliers[0]?.id, items: [{ productId: products[0]?.id, qty: 1, unitCost: products[0]?.costPrice || 0 }] });
 
   const addLine = () => setForm(f => ({ ...f, items: [...f.items, { productId: products[0]?.id, qty: 1, unitCost: products[0]?.costPrice || 0 }] }));
@@ -1978,29 +2156,43 @@ function Purchasing({ t, suppliers, setSuppliers, products, setProducts, purchas
   const removeLine = (idx) => setForm(f => ({ ...f, items: f.items.filter((_, i) => i !== idx) }));
   const total = form.items.reduce((s, i) => s + i.qty * i.unitCost, 0);
 
-  const createPO = () => {
+  const createPO = async () => {
     if (form.items.some(i => i.qty <= 0 || i.unitCost <= 0)) { notify('Each line item needs a valid quantity and cost.', 'error'); return; }
-    const supplier = suppliers.find(s => s.id === +form.supplierId);
-    const poNo = `PO-${String(purchaseOrders.length + 1).padStart(4, '0')}`;
-    const items = form.items.map(i => ({ ...i, name: products.find(p => p.id === +i.productId)?.name }));
-    setPurchaseOrders(prev => [{ id: nextId(), poNo, supplierId: +form.supplierId, supplierName: supplier.name, date: todayStr(), items, total, status: 'Pending', grnNo: null }, ...prev]);
-    logAudit({ action: `Created ${poNo}`, module: 'Purchasing', before: '-', after: money(total, companyInfo.currency) });
-    notify(`Purchase order ${poNo} created.`);
-    setModal(false);
-    setForm({ supplierId: suppliers[0]?.id, items: [{ productId: products[0]?.id, qty: 1, unitCost: products[0]?.costPrice || 0 }] });
+    setSubmitting(true);
+    try {
+      const { purchaseOrder } = await api.createPurchaseOrder({
+        supplierId: +form.supplierId,
+        items: form.items.map(i => ({ productId: +i.productId, qty: +i.qty, unitCost: +i.unitCost })),
+      });
+      await refetchPurchaseOrders();
+      logAudit({ action: `Created ${purchaseOrder.po_no}`, module: 'Purchasing', before: '-', after: money(total, companyInfo.currency) });
+      notify(`Purchase order ${purchaseOrder.po_no} created.`);
+      setModal(false);
+      setForm({ supplierId: suppliers[0]?.id, items: [{ productId: products[0]?.id, qty: 1, unitCost: products[0]?.costPrice || 0 }] });
+    } catch (err) {
+      notify(err.message, 'error');
+    } finally {
+      setSubmitting(false);
+    }
   };
 
-  const receivePO = (po) => {
-    setProducts(prev => prev.map(p => {
-      const line = po.items.find(i => +i.productId === p.id);
-      return line ? { ...p, stockQty: p.stockQty + +line.qty } : p;
-    }));
-    po.items.forEach(i => addMovement(+i.productId, 'Purchase', +i.qty, po.poNo));
-    setSuppliers(prev => prev.map(s => s.id === po.supplierId ? { ...s, balance: s.balance + po.total } : s));
-    const grnNo = `GRN-${String(purchaseOrders.filter(p => p.grnNo).length + 1).padStart(4, '0')}`;
-    setPurchaseOrders(prev => prev.map(p => p.id === po.id ? { ...p, status: 'Received', grnNo } : p));
-    logAudit({ action: `Received ${po.poNo} (${grnNo})`, module: 'Purchasing', before: 'Pending', after: 'Received' });
-    notify(`${po.poNo} received and stock updated (${grnNo}).`);
+  // Receives everything still outstanding on the order in one action — matches the existing
+  // one-click "Receive" UX. Partial-line receiving would need its own line-by-line screen,
+  // which this doesn't have yet.
+  const receivePO = async (po) => {
+    const lines = po.items.filter(i => i.qtyReceived < i.qtyOrdered).map(i => ({ poItemId: i.id, qty: i.qtyOrdered - i.qtyReceived }));
+    if (lines.length === 0) { notify('Nothing outstanding to receive on this order.', 'error'); return; }
+    setReceivingId(po.id);
+    try {
+      const { purchaseOrder } = await api.receivePurchaseOrder(po.id, { lines });
+      await Promise.all([refetchPurchaseOrders(), refetchProducts(), refetchSuppliers()]);
+      logAudit({ action: `Received ${po.poNo} (${purchaseOrder.grn_no})`, module: 'Purchasing', before: po.status, after: purchaseOrder.status });
+      notify(`${po.poNo} received and stock updated (${purchaseOrder.grn_no}).`);
+    } catch (err) {
+      notify(err.message, 'error');
+    } finally {
+      setReceivingId(null);
+    }
   };
 
   return (
@@ -2021,13 +2213,13 @@ function Purchasing({ t, suppliers, setSuppliers, products, setProducts, purchas
               <tr key={po.id} style={{ borderBottom: `1px solid ${t.border}` }}>
                 <td className="px-4 py-3 font-medium" style={{ fontFamily: "'JetBrains Mono',monospace" }}>{po.poNo}</td>
                 <td className="px-4 py-3">{po.supplierName}</td>
-                <td className="px-4 py-3 text-xs">{po.date}</td>
-                <td className="px-4 py-3 text-xs">{po.items.map(i => i.name).join(', ')}</td>
-                <td className="px-4 py-3 font-medium">{po.items.reduce((s, i) => s + Number(i.qty || 0), 0)}</td>
+                <td className="px-4 py-3 text-xs">{(po.createdAt || '').slice(0, 10)}</td>
+                <td className="px-4 py-3 text-xs">{po.items.map(i => products.find(p => p.id === i.productId)?.name || `#${i.productId}`).join(', ')}</td>
+                <td className="px-4 py-3 font-medium">{po.items.reduce((s, i) => s + Number(i.qtyOrdered || 0), 0)}</td>
                 <td className="px-4 py-3">{fmt(po.total)}</td>
                 <td className="px-4 py-3"><Badge t={t} tone={po.status === 'Received' ? 'success' : 'warning'}>{po.status}</Badge></td>
                 <td className="px-4 py-3 text-xs" style={{ fontFamily: "'JetBrains Mono',monospace" }}>{po.grnNo || '—'}</td>
-                <td className="px-4 py-3">{po.status === 'Pending' && <Btn t={t} variant="secondary" onClick={() => receivePO(po)}>Receive</Btn>}</td>
+                <td className="px-4 py-3">{po.status !== 'Received' && po.status !== 'Cancelled' && <Btn t={t} variant="secondary" onClick={() => receivePO(po)} disabled={receivingId === po.id}>{receivingId === po.id ? 'Receiving…' : 'Receive'}</Btn>}</td>
               </tr>
             ))}
           </tbody>
@@ -2039,7 +2231,7 @@ function Purchasing({ t, suppliers, setSuppliers, products, setProducts, purchas
           footer={<>
             <span className="font-semibold mr-auto">Total: {fmt(total)} {companyInfo.currency}</span>
             <Btn t={t} variant="secondary" onClick={() => setModal(false)}>Cancel</Btn>
-            <Btn t={t} variant="primary" onClick={createPO}>Create Order</Btn>
+            <Btn t={t} variant="primary" onClick={createPO} disabled={submitting}>{submitting ? 'Creating…' : 'Create Order'}</Btn>
           </>}>
           <Field t={t} label="Supplier"><TSelect t={t} value={form.supplierId} onChange={e => setForm(f => ({ ...f, supplierId: e.target.value }))}>{suppliers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}</TSelect></Field>
           <div className="mt-3 flex flex-col gap-2">
@@ -2060,7 +2252,7 @@ function Purchasing({ t, suppliers, setSuppliers, products, setProducts, purchas
 }
 
 /* ============================== CUSTOMERS ============================== */
-function Customers({ t, customers, setCustomers, sales, setSales, companyInfo, notify, role, currentUser, logAudit }) {
+function Customers({ t, customers, setCustomers, refetchCustomers, sales, setSales, refetchSales, companyInfo, notify, role, currentUser, logAudit }) {
   const [modal, setModal] = useState(false);
   const [editingCustomer, setEditingCustomer] = useState(null);
   const [statementFor, setStatementFor] = useState(null);
@@ -2068,33 +2260,56 @@ function Customers({ t, customers, setCustomers, sales, setSales, companyInfo, n
   const isOwner = !!currentUser?.isOwner;
   const canEditStatement = isOwner || role === 'Manager';
 
-  const addCustomer = () => {
+  const addCustomer = async () => {
     if (!form.name || !form.phone) { notify('Name and phone are required.', 'error'); return; }
-    setCustomers(prev => [...prev, { id: nextId(), ...form, balance: 0 }]);
-    logAudit({ action: `Added customer ${form.name}`, module: 'Customers', before: '-', after: form.name });
-    notify(`Customer "${form.name}" added.`);
-    setModal(false); setForm({ name: '', phone: '', email: '', creditLimit: 0 });
+    try {
+      await api.createCustomer(form);
+      await refetchCustomers();
+      logAudit({ action: `Added customer ${form.name}`, module: 'Customers', before: '-', after: form.name });
+      notify(`Customer "${form.name}" added.`);
+      setModal(false); setForm({ name: '', phone: '', email: '', creditLimit: 0 });
+    } catch (err) {
+      notify(err.message, 'error');
+    }
   };
 
-  const saveEdit = () => {
-    setCustomers(prev => prev.map(c => c.id === editingCustomer.id ? { ...c, ...form } : c));
-    logAudit({ action: `Edited customer ${form.name}`, module: 'Customers', before: editingCustomer.name, after: form.name });
-    notify(`${form.name} updated.`);
-    setEditingCustomer(null);
+  const saveEdit = async () => {
+    try {
+      await api.updateCustomer(editingCustomer.id, { ...form, expectedUpdatedAt: editingCustomer.updatedAt });
+      await refetchCustomers();
+      logAudit({ action: `Edited customer ${form.name}`, module: 'Customers', before: editingCustomer.name, after: form.name });
+      notify(`${form.name} updated.`);
+      setEditingCustomer(null);
+    } catch (err) {
+      notify(err.message, 'error');
+    }
   };
 
-  const removeCustomer = (c) => {
+  const removeCustomer = async (c) => {
     if (c.balance > 0) { notify(`Cannot remove ${c.name} — they still owe ${fmt(c.balance)}. Settle the balance first.`, 'error'); return; }
-    setCustomers(prev => prev.filter(x => x.id !== c.id));
-    logAudit({ action: `Removed customer ${c.name}`, module: 'Customers', before: c.name, after: '-' });
-    notify(`${c.name} removed.`);
+    try {
+      await api.deleteCustomer(c.id);
+      await refetchCustomers();
+      logAudit({ action: `Removed customer ${c.name}`, module: 'Customers', before: c.name, after: '-' });
+      notify(`${c.name} removed.`);
+    } catch (err) {
+      notify(err.message, 'error');
+    }
   };
 
-  const setSaleStatus = (sale, newStatus) => {
-    const old = sale.status;
-    setSales(prev => prev.map(s => s.id === sale.id ? { ...s, status: newStatus } : s));
-    logAudit({ action: `Corrected ${sale.invoiceNo} status`, module: 'Customers', before: old, after: newStatus });
-    notify(`${sale.invoiceNo} marked as ${newStatus}.`);
+  const [correctingStatus, setCorrectingStatus] = useState(false);
+  const setSaleStatus = async (sale, newStatus) => {
+    setCorrectingStatus(true);
+    try {
+      await api.correctSaleStatus(sale.id, newStatus);
+      await Promise.all([refetchSales(), refetchCustomers()]);
+      logAudit({ action: `Corrected ${sale.invoiceNo} status`, module: 'Customers', before: sale.status, after: newStatus });
+      notify(`${sale.invoiceNo} marked as ${newStatus} — customer balance and ledger updated.`);
+    } catch (err) {
+      notify(err.message, 'error');
+    } finally {
+      setCorrectingStatus(false);
+    }
   };
 
   return (
@@ -2161,8 +2376,8 @@ function Customers({ t, customers, setCustomers, sales, setSales, companyInfo, n
                   {canEditStatement && (
                     <td className="px-3 py-2">
                       {s.status === 'Credit'
-                        ? <Btn t={t} variant="secondary" onClick={() => setSaleStatus(s, 'Paid')}>Mark Paid</Btn>
-                        : <Btn t={t} variant="secondary" onClick={() => setSaleStatus(s, 'Credit')}>Mark Credit</Btn>}
+                        ? <Btn t={t} variant="secondary" onClick={() => setSaleStatus(s, 'Paid')} disabled={correctingStatus}>Mark Paid</Btn>
+                        : <Btn t={t} variant="secondary" onClick={() => setSaleStatus(s, 'Credit')} disabled={correctingStatus}>Mark Credit</Btn>}
                     </td>
                   )}
                 </tr>
@@ -2177,7 +2392,7 @@ function Customers({ t, customers, setCustomers, sales, setSales, companyInfo, n
 }
 
 /* ============================== SUPPLIERS ============================== */
-function Suppliers({ t, suppliers, setSuppliers, purchaseOrders, companyInfo, notify, role, currentUser, logAudit }) {
+function Suppliers({ t, suppliers, refetchSuppliers, purchaseOrders, companyInfo, notify, role, currentUser, logAudit }) {
   const [payFor, setPayFor] = useState(null);
   const [amount, setAmount] = useState(0);
   const [modal, setModal] = useState(false);
@@ -2185,34 +2400,54 @@ function Suppliers({ t, suppliers, setSuppliers, purchaseOrders, companyInfo, no
   const [form, setForm] = useState({ name: '', phone: '', email: '' });
   const canManage = !!currentUser?.isOwner || role === 'Manager';
 
-  const recordPayment = () => {
+  const recordPayment = async () => {
     if (amount <= 0 || amount > payFor.balance) { notify('Enter a valid amount up to the outstanding balance.', 'error'); return; }
-    setSuppliers(prev => prev.map(s => s.id === payFor.id ? { ...s, balance: s.balance - amount } : s));
-    logAudit({ action: `Recorded payment of ${amount} to ${payFor.name}`, module: 'Suppliers', before: `Balance: ${payFor.balance}`, after: `Balance: ${payFor.balance - amount}` });
-    notify(`Payment of ${money(amount, companyInfo.currency)} recorded for ${payFor.name}.`);
-    setPayFor(null); setAmount(0);
+    try {
+      await api.paySupplier(payFor.id, { amount });
+      await refetchSuppliers();
+      logAudit({ action: `Recorded payment of ${amount} to ${payFor.name}`, module: 'Suppliers', before: `Balance: ${payFor.balance}`, after: `Balance: ${payFor.balance - amount}` });
+      notify(`Payment of ${money(amount, companyInfo.currency)} recorded for ${payFor.name}.`);
+      setPayFor(null); setAmount(0);
+    } catch (err) {
+      notify(err.message, 'error');
+    }
   };
 
-  const addSupplier = () => {
+  const addSupplier = async () => {
     if (!form.name.trim()) { notify('Supplier name is required.', 'error'); return; }
-    setSuppliers(prev => [...prev, { id: nextId(), ...form, balance: 0 }]);
-    logAudit({ action: `Added supplier ${form.name}`, module: 'Suppliers', before: '-', after: form.name });
-    notify(`${form.name} added.`);
-    setModal(false); setForm({ name: '', phone: '', email: '' });
+    try {
+      await api.createSupplier(form);
+      await refetchSuppliers();
+      logAudit({ action: `Added supplier ${form.name}`, module: 'Suppliers', before: '-', after: form.name });
+      notify(`${form.name} added.`);
+      setModal(false); setForm({ name: '', phone: '', email: '' });
+    } catch (err) {
+      notify(err.message, 'error');
+    }
   };
 
-  const saveEdit = () => {
-    setSuppliers(prev => prev.map(s => s.id === editingSupplier.id ? { ...s, ...form } : s));
-    logAudit({ action: `Edited supplier ${form.name}`, module: 'Suppliers', before: editingSupplier.name, after: form.name });
-    notify(`${form.name} updated.`);
-    setEditingSupplier(null);
+  const saveEdit = async () => {
+    try {
+      await api.updateSupplier(editingSupplier.id, { ...form, expectedUpdatedAt: editingSupplier.updatedAt });
+      await refetchSuppliers();
+      logAudit({ action: `Edited supplier ${form.name}`, module: 'Suppliers', before: editingSupplier.name, after: form.name });
+      notify(`${form.name} updated.`);
+      setEditingSupplier(null);
+    } catch (err) {
+      notify(err.message, 'error');
+    }
   };
 
-  const removeSupplier = (s) => {
+  const removeSupplier = async (s) => {
     if (s.balance > 0) { notify(`Cannot remove ${s.name} — outstanding balance of ${fmt(s.balance)}. Settle it first.`, 'error'); return; }
-    setSuppliers(prev => prev.filter(x => x.id !== s.id));
-    logAudit({ action: `Removed supplier ${s.name}`, module: 'Suppliers', before: s.name, after: '-' });
-    notify(`${s.name} removed.`);
+    try {
+      await api.deleteSupplier(s.id);
+      await refetchSuppliers();
+      logAudit({ action: `Removed supplier ${s.name}`, module: 'Suppliers', before: s.name, after: '-' });
+      notify(`${s.name} removed.`);
+    } catch (err) {
+      notify(err.message, 'error');
+    }
   };
 
   return (
@@ -2271,32 +2506,31 @@ function Suppliers({ t, suppliers, setSuppliers, purchaseOrders, companyInfo, no
 }
 
 /* ============================== RETURNS ============================== */
-function ReturnsModule({ t, products, setProducts, sales, customers, setCustomers, suppliers, setSuppliers, returns, setReturns, companyInfo, notify, addMovement, logAudit }) {
+function ReturnsModule({ t, products, refetchProducts, sales, customers, refetchCustomers, suppliers, refetchSuppliers, returns, refetchReturns, companyInfo, notify, logAudit }) {
   const [tab, setTab] = useState('customer');
+  const [submitting, setSubmitting] = useState(false);
   const [form, setForm] = useState({ productId: products[0]?.id, qty: 1, reason: '', condition: 'Resellable', customerId: customers[0]?.id, supplierId: suppliers[0]?.id });
 
-  const submitReturn = () => {
+  const submitReturn = async () => {
     if (form.qty <= 0 || !form.reason) { notify('Enter a valid quantity and reason.', 'error'); return; }
     const product = products.find(p => p.id === +form.productId);
-    const refNo = `RET-${String(returns.length + 1).padStart(4, '0')}`;
-    if (tab === 'customer') {
-      const resellable = form.condition === 'Resellable';
-      if (resellable) { setProducts(prev => prev.map(p => p.id === product.id ? { ...p, stockQty: p.stockQty + +form.qty } : p)); addMovement(product.id, 'Return-In', +form.qty, refNo); }
-      const refundAmt = product.sellPrice * form.qty;
-      setCustomers(prev => prev.map(c => c.id === +form.customerId ? { ...c, balance: Math.max(0, c.balance - refundAmt) } : c));
-      setReturns(prev => [{ id: nextId(), type: 'Customer', refNo, partyName: customers.find(c => c.id === +form.customerId)?.name, productId: product.id, productName: product.name, qty: form.qty, reason: form.reason, condition: form.condition, date: todayStr() }, ...prev]);
-      logAudit({ action: `Processed customer return ${refNo}`, module: 'Returns', before: `Stock: ${product.stockQty}`, after: `Stock: ${resellable ? product.stockQty + +form.qty : product.stockQty}` });
-      notify(`Customer return ${refNo} processed.`);
-    } else {
-      setProducts(prev => prev.map(p => p.id === product.id ? { ...p, stockQty: Math.max(0, p.stockQty - form.qty) } : p));
-      addMovement(product.id, 'Return-Out', -form.qty, refNo);
-      const creditAmt = product.costPrice * form.qty;
-      setSuppliers(prev => prev.map(s => s.id === +form.supplierId ? { ...s, balance: Math.max(0, s.balance - creditAmt) } : s));
-      setReturns(prev => [{ id: nextId(), type: 'Supplier', refNo, partyName: suppliers.find(s => s.id === +form.supplierId)?.name, productId: product.id, productName: product.name, qty: form.qty, reason: form.reason, condition: form.condition, date: todayStr() }, ...prev]);
-      logAudit({ action: `Processed supplier return ${refNo}`, module: 'Returns', before: `Stock: ${product.stockQty}`, after: `Stock: ${product.stockQty - form.qty}` });
-      notify(`Supplier return ${refNo} processed.`);
+    setSubmitting(true);
+    try {
+      const { return: created } = await api.createReturn({
+        type: tab === 'customer' ? 'Customer' : 'Supplier',
+        productId: product.id, qty: +form.qty, reason: form.reason, condition: form.condition,
+        customerId: tab === 'customer' ? +form.customerId : undefined,
+        supplierId: tab === 'supplier' ? +form.supplierId : undefined,
+      });
+      await Promise.all([refetchProducts(), refetchReturns(), tab === 'customer' ? refetchCustomers() : refetchSuppliers()]);
+      logAudit({ action: `Processed ${tab} return ${created.ref_no}`, module: 'Returns', before: '-', after: `Qty: ${form.qty}` });
+      notify(`${tab === 'customer' ? 'Customer' : 'Supplier'} return ${created.ref_no} processed.`);
+      setForm(f => ({ ...f, qty: 1, reason: '' }));
+    } catch (err) {
+      notify(err.message, 'error');
+    } finally {
+      setSubmitting(false);
     }
-    setForm(f => ({ ...f, qty: 1, reason: '' }));
   };
 
   return (
@@ -2362,10 +2596,6 @@ function Reports({ t, products, sales, purchaseOrders, customers, suppliers, mov
     { id: 'movers', label: 'Fast/Slow Movers', icon: TrendingDown },
   ];
 
-  const exportInventory = () => downloadCSV('inventory-valuation.csv', [['SKU', 'Name', 'Category', 'Stock', 'Cost Price', 'Value'], ...products.map(p => [p.sku, p.name, p.category, p.stockQty, p.costPrice, p.stockQty * p.costPrice])]);
-  const exportSales = () => downloadCSV('sales-report.csv', [['Invoice', 'Date', 'Customer', 'Total', 'Status'], ...sales.map(s => [s.invoiceNo, s.date, s.customerName, s.total, s.status])]);
-  const exportReturns = () => downloadCSV('returns-report.csv', [['Ref #', 'Type', 'Product', 'Qty', 'Party', 'Condition', 'Reason', 'Date'], ...returns.map(r => [r.refNo, r.type, r.productName, r.qty, r.partyName, r.condition, r.reason, r.date])]);
-
   return (
     <div className="flex flex-col gap-4">
       <div><h1 className="text-xl font-semibold" style={{ fontFamily: "'Space Grotesk',sans-serif" }}>Reports</h1><p className="text-sm" style={{ color: t.textMuted }}>All figures calculated live from current inventory, sales and purchase data.</p></div>
@@ -2383,7 +2613,7 @@ function Reports({ t, products, sales, purchaseOrders, customers, suppliers, mov
 
       <Card t={t} className="p-4">
         {active === 'inventory' && (
-          <ReportTable t={t} title="Inventory Valuation" onExport={exportInventory}
+          <ReportTable t={t} title="Inventory Valuation"
             head={['SKU', 'Name', 'Category', 'Stock', 'Cost Price', 'Value']}
             rows={products.map(p => [p.sku, p.name, p.category, p.stockQty, fmt(p.costPrice), fmt(p.stockQty * p.costPrice)])}
             footer={`Total Inventory Value: ${money(products.reduce((s, p) => s + p.stockQty * p.costPrice, 0), companyInfo.currency)}`} />
@@ -2396,24 +2626,24 @@ function Reports({ t, products, sales, purchaseOrders, customers, suppliers, mov
         {active === 'lowstock' && (
           <ReportTable t={t} title="Low Stock Report"
             head={['SKU', 'Name', 'Stock', 'Reorder Level', 'Location']}
-            rows={products.filter(p => p.stockQty <= p.reorderLevel).map(p => [p.sku, p.name, p.stockQty, p.reorderLevel, p.location])} />
+            rows={products.filter(p => p.stockQty <= p.reorderLevel).map(p => [p.sku, p.name, p.stockQty, p.reorderLevel, [p.rack, p.shelfBin].filter(Boolean).join(' - ') || '—'])} />
         )}
         {active === 'sales' && (
-          <ReportTable t={t} title="Sales Report" onExport={exportSales}
+          <ReportTable t={t} title="Sales Report"
             head={['Invoice', 'Date', 'Customer', 'Total', 'Status']}
             rows={sales.map(s => [s.invoiceNo, s.date, s.customerName, fmt(s.total), s.status])}
             footer={`Total Revenue: ${money(sales.reduce((s, x) => s + x.total, 0), companyInfo.currency)}`} />
         )}
         {active === 'profit' && (
-          <ReportTable t={t} title="Profit & Loss (session)"
+          <ReportTable t={t} title="Profit & Loss"
             head={['Invoice', 'Revenue', 'COGS', 'Gross Profit']}
-            rows={sales.map(s => { const cogs = s.items.reduce((a, i) => a + i.cost * i.qty, 0); return [s.invoiceNo, fmt(s.total), fmt(cogs), fmt(s.total - cogs)]; })}
-            footer={`Gross Profit: ${money(sales.reduce((s, x) => s + (x.total - x.items.reduce((a, i) => a + i.cost * i.qty, 0)), 0), companyInfo.currency)}`} />
+            rows={sales.map(s => { const cogs = s.items.reduce((a, i) => a + (i.cost || 0) * i.qty, 0); return [s.invoiceNo, fmt(s.total), fmt(cogs), fmt(s.total - cogs)]; })}
+            footer={`Gross Profit: ${money(sales.reduce((s, x) => s + (x.total - x.items.reduce((a, i) => a + (i.cost || 0) * i.qty, 0)), 0), companyInfo.currency)}`} />
         )}
         {active === 'purchases' && (
           <ReportTable t={t} title="Purchases Report"
             head={['PO #', 'Supplier', 'Date', 'Total', 'Status']}
-            rows={purchaseOrders.map(p => [p.poNo, p.supplierName, p.date, fmt(p.total), p.status])} />
+            rows={purchaseOrders.map(p => [p.poNo, p.supplierName, (p.createdAt || '').slice(0, 10), fmt(p.total), p.status])} />
         )}
         {active === 'customers' && (
           <ReportTable t={t} title="Customer Balances"
@@ -2428,7 +2658,7 @@ function Reports({ t, products, sales, purchaseOrders, customers, suppliers, mov
             footer={`Total Payables: ${money(suppliers.reduce((s, x) => s + x.balance, 0), companyInfo.currency)}`} />
         )}
         {active === 'returns' && (
-          <ReportTable t={t} title="Returns Report" onExport={exportReturns}
+          <ReportTable t={t} title="Returns Report"
             head={['Ref #', 'Type', 'Product', 'Qty', 'Party', 'Condition', 'Reason', 'Date']}
             rows={returns.map(r => [r.refNo, r.type, r.productName, r.qty, r.partyName, r.condition, r.reason, r.date])}
             footer={`Total Returns: ${returns.length} (${returns.filter(r => r.type === 'Customer').length} customer, ${returns.filter(r => r.type === 'Supplier').length} supplier)`} />
@@ -2466,12 +2696,19 @@ function ReportTable({ t, title, head, rows, footer }) {
 }
 
 /* ============================== USERS & SECURITY ============================== */
-function UsersSecurity({ t, users, setUsers, permissions, setPermissions, auditLog, currentUser, notify, logAudit }) {
+function UsersSecurity({ t, users, refetchUsers, permissions, setPermissions, auditLog, currentUser, notify, logAudit }) {
   const roles = Object.keys(permissions);
   const isOwner = !!currentUser?.isOwner;
   const [editingUser, setEditingUser] = useState(null); // null = closed, 'new' = create, or a user object = edit
+  const [savingUser, setSavingUser] = useState(false);
   const VALID_ROLES = ['Admin', 'Manager', 'Sales', 'Inventory', 'Accountant'];
 
+  // NOTE: this permission matrix has no backend table behind it — it's a local UI
+  // convenience that decides which nav items a role sees, not a security boundary. Real
+  // enforcement already happens server-side on every route (requireRole checks), independent
+  // of whatever this toggle shows, so it staying local doesn't create a security gap — it
+  // just means a change here won't be visible to a teammate until they've reloaded with the
+  // same build. A real fix would need a permissions table and endpoints, which don't exist yet.
   const togglePermission = (r, moduleId) => {
     if (!isOwner) return;
     setPermissions(prev => {
@@ -2482,29 +2719,44 @@ function UsersSecurity({ t, users, setUsers, permissions, setPermissions, auditL
     });
   };
 
-  const toggleStatus = (u) => {
+  const toggleStatus = async (u) => {
     if (!isOwner) return;
     if (u.isOwner) { notify('The owner account cannot be deactivated.', 'error'); return; }
     const newStatus = u.status === 'Active' ? 'Inactive' : 'Active';
-    setUsers(prev => prev.map(x => x.id === u.id ? { ...x, status: newStatus } : x));
-    logAudit({ action: `Set ${u.name} to ${newStatus}`, module: 'Users & Security', before: u.status, after: newStatus });
-    notify(`${u.name} is now ${newStatus}.`);
+    try {
+      await api.setUserStatus(u.id, newStatus);
+      await refetchUsers();
+      logAudit({ action: `Set ${u.name} to ${newStatus}`, module: 'Users & Security', before: u.status, after: newStatus });
+      notify(`${u.name} is now ${newStatus}.`);
+    } catch (err) {
+      notify(err.message, 'error');
+    }
   };
 
-  const saveUser = (form) => {
-    if (!form.name.trim() || !form.email.trim() || !form.password.trim()) { notify('Name, email and password are all required.', 'error'); return; }
-    if (form.id) {
-      const old = users.find(u => u.id === form.id);
-      setUsers(prev => prev.map(u => u.id === form.id ? { ...u, ...form } : u));
-      logAudit({ action: `Edited user ${form.name}`, module: 'Users & Security', before: `Role: ${old.role}`, after: `Role: ${form.role}` });
-      notify(`${form.name} updated.`);
-    } else {
-      const newUser = { id: nextId(), ...form, isOwner: false, lastLogin: 'Never' };
-      setUsers(prev => [...prev, newUser]);
-      logAudit({ action: `Created user ${form.name} (${form.role})`, module: 'Users & Security', before: '-', after: form.role });
-      notify(`${form.name} added.`);
+  const saveUser = async (form) => {
+    if (!form.name.trim() || !form.email.trim() || (!form.id && !form.password.trim())) {
+      notify(form.id ? 'Name and email are required.' : 'Name, email and password are all required.', 'error'); return;
     }
-    setEditingUser(null);
+    setSavingUser(true);
+    try {
+      if (form.id) {
+        const old = users.find(u => u.id === form.id);
+        await api.updateUser(form.id, { name: form.name, email: form.email, role: form.role, password: form.password || undefined });
+        await refetchUsers();
+        logAudit({ action: `Edited user ${form.name}`, module: 'Users & Security', before: `Role: ${old.role}`, after: `Role: ${form.role}` });
+        notify(`${form.name} updated.`);
+      } else {
+        await api.createUser({ name: form.name, email: form.email, password: form.password, role: form.role });
+        await refetchUsers();
+        logAudit({ action: `Created user ${form.name} (${form.role})`, module: 'Users & Security', before: '-', after: form.role });
+        notify(`${form.name} added.`);
+      }
+      setEditingUser(null);
+    } catch (err) {
+      notify(err.message, 'error');
+    } finally {
+      setSavingUser(false);
+    }
   };
 
   return (
@@ -2588,15 +2840,15 @@ function UsersSecurity({ t, users, setUsers, permissions, setPermissions, auditL
       </Card>
 
       {editingUser && (
-        <UserEditModal t={t} user={editingUser === 'new' ? null : editingUser} onClose={() => setEditingUser(null)} onSave={saveUser} validRoles={VALID_ROLES} />
+        <UserEditModal t={t} user={editingUser === 'new' ? null : editingUser} onClose={() => setEditingUser(null)} onSave={saveUser} validRoles={VALID_ROLES} saving={savingUser} />
       )}
     </div>
   );
 }
 
-function UserEditModal({ t, user, onClose, onSave, validRoles }) {
+function UserEditModal({ t, user, onClose, onSave, validRoles, saving }) {
   const [form, setForm] = useState(user
-    ? { id: user.id, name: user.name, email: user.email, password: user.password, role: user.role, status: user.status }
+    ? { id: user.id, name: user.name, email: user.email, password: '', role: user.role, status: user.status }
     : { name: '', email: '', password: '', role: 'Sales', status: 'Active' });
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
 
@@ -2604,12 +2856,12 @@ function UserEditModal({ t, user, onClose, onSave, validRoles }) {
     <Modal t={t} title={user ? `Edit ${user.name}` : 'Add User'} onClose={onClose}
       footer={<>
         <Btn t={t} variant="secondary" onClick={onClose}>Cancel</Btn>
-        <Btn t={t} variant="primary" onClick={() => onSave(form)}>{user ? 'Save Changes' : 'Add User'}</Btn>
+        <Btn t={t} variant="primary" onClick={() => onSave(form)} disabled={saving}>{saving ? 'Saving…' : (user ? 'Save Changes' : 'Add User')}</Btn>
       </>}>
       <div className="flex flex-col gap-3">
         <Field t={t} label="Full Name *"><TInput t={t} value={form.name} onChange={e => set('name', e.target.value)} /></Field>
         <Field t={t} label="Email *"><TInput t={t} type="email" value={form.email} onChange={e => set('email', e.target.value)} /></Field>
-        <Field t={t} label="Password *"><TInput t={t} value={form.password} onChange={e => set('password', e.target.value)} placeholder={user ? 'Leave as-is or set a new one' : ''} /></Field>
+        <Field t={t} label={user ? 'Password' : 'Password *'}><TInput t={t} value={form.password} onChange={e => set('password', e.target.value)} placeholder={user ? 'Leave blank to keep the current password' : ''} /></Field>
         <Field t={t} label="Role"><TSelect t={t} value={form.role} onChange={e => set('role', e.target.value)}>{validRoles.map(r => <option key={r}>{r}</option>)}</TSelect></Field>
         <Field t={t} label="Status"><TSelect t={t} value={form.status} onChange={e => set('status', e.target.value)}><option>Active</option><option>Inactive</option></TSelect></Field>
       </div>
@@ -2618,9 +2870,10 @@ function UserEditModal({ t, user, onClose, onSave, validRoles }) {
 }
 
 /* ============================== SETTINGS ============================== */
-function SettingsPage({ t, companyInfo, setCompanyInfo, notify, role }) {
+function SettingsPage({ t, companyInfo, setCompanyInfo, notify, role, logout, setConfirm }) {
   const [form, setForm] = useState(companyInfo);
   const [saving, setSaving] = useState(false);
+  const [clearing, setClearing] = useState(false);
   const canEdit = role === 'Admin';
   useEffect(() => setForm(companyInfo), [companyInfo]); // keep the form in sync once the real fetch resolves
   const save = async () => {
@@ -2638,6 +2891,50 @@ function SettingsPage({ t, companyInfo, setCompanyInfo, notify, role }) {
     }
   };
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
+
+  /**
+   * This app doesn't use cookies at all — the login session lives in localStorage as a
+   * token, not a cookie, so there's no "allow cookies" toggle that would do anything real.
+   * What's genuinely useful for troubleshooting stale data or a misbehaving install is a
+   * real reset: clear the PWA's offline cache, force the service worker to re-fetch a fresh
+   * copy of the app on next load, and sign out cleanly. Real business data is never touched
+   * by this — it all lives in Postgres, not the browser.
+   */
+  const clearCacheAndSignOut = async () => {
+    setClearing(true);
+    try {
+      if ('caches' in window) {
+        const keys = await caches.keys();
+        await Promise.all(keys.map((k) => caches.delete(k)));
+      }
+      if ('serviceWorker' in navigator) {
+        const regs = await navigator.serviceWorker.getRegistrations();
+        await Promise.all(regs.map((r) => r.unregister()));
+      }
+    } catch { /* best effort — still sign out even if cache APIs aren't available */ }
+    logout();
+  };
+
+  const confirmClearCache = () => setConfirm({
+    title: 'Clear cache & sign out',
+    message: "This clears the app's local offline cache on this device and signs you out. Your products, sales, customers and every other record are unaffected — they live in the database, not on this device.",
+    confirmLabel: 'Clear & Sign Out',
+    onConfirm: clearCacheAndSignOut,
+  });
+
+  const [signingOutAll, setSigningOutAll] = useState(false);
+  const confirmLogoutAll = () => setConfirm({
+    title: 'Sign out of all devices',
+    message: 'This immediately ends every active login session for your account — this device, your phone, any other browser you left signed in. Genuinely useful if a device was lost or you suspect someone else has access. You will need to log in again here too.',
+    confirmLabel: 'Sign Out Everywhere',
+    onConfirm: async () => {
+      setSigningOutAll(true);
+      try {
+        await api.logoutAllDevices();
+      } catch { /* revoke on the server may have failed, but we still clear this device below */ }
+      logout();
+    },
+  });
 
   return (
     <div className="flex flex-col gap-4 max-w-2xl">
@@ -2694,12 +2991,35 @@ function SettingsPage({ t, companyInfo, setCompanyInfo, notify, role }) {
         <Field t={t} label="Document Footer (e.g. payment terms)"><TInput t={t} disabled={!canEdit} value={form.receiptFooter} onChange={e => set('receiptFooter', e.target.value)} /></Field>
         {canEdit && <div className="flex justify-end"><Btn t={t} variant="primary" onClick={save} disabled={saving}>{saving ? 'Saving…' : 'Save Settings'}</Btn></div>}
       </Card>
+
+      <Card t={t} className="p-5 flex flex-col gap-3">
+        <div>
+          <h3 className="font-semibold text-sm" style={{ fontFamily: "'Space Grotesk',sans-serif" }}>Data & Storage</h3>
+          <p className="text-xs mt-1" style={{ color: t.textFaint }}>
+            This app doesn't use cookies — signing in stores a token on this device instead, so there's no "allow cookies" setting that would do anything. If the app is showing something stale or acting oddly on a particular device, clearing its local cache below forces a completely fresh copy on next load.
+          </p>
+        </div>
+        <div className="flex items-center justify-between p-3 rounded-md" style={{ background: t.surfaceAlt }}>
+          <div>
+            <div className="text-sm font-medium">Clear cache & sign out</div>
+            <div className="text-xs" style={{ color: t.textFaint }}>Only affects this device. Your products, sales, and every business record stay exactly as they are — they live in the database, not the browser.</div>
+          </div>
+          <Btn t={t} variant="danger" onClick={confirmClearCache} disabled={clearing}>{clearing ? 'Clearing…' : 'Clear Cache'}</Btn>
+        </div>
+        <div className="flex items-center justify-between p-3 rounded-md" style={{ background: t.surfaceAlt }}>
+          <div>
+            <div className="text-sm font-medium">Sign out of all devices</div>
+            <div className="text-xs" style={{ color: t.textFaint }}>Ends every active login for your account everywhere — a real security action, not just a local reset. Use this if a device was lost or shared.</div>
+          </div>
+          <Btn t={t} variant="danger" onClick={confirmLogoutAll} disabled={signingOutAll}>{signingOutAll ? 'Signing out…' : 'Sign Out Everywhere'}</Btn>
+        </div>
+      </Card>
     </div>
   );
 }
 
 /* ============================== INVENTORY CONTROL CENTER ============================== */
-function InventoryControlCenter({ t, products, setProducts, movements, addMovement, sales, purchaseOrders, suppliers, customers, returns, companyInfo, notify, logAudit, role, setActiveModule }) {
+function InventoryControlCenter({ t, products, refetchProducts, movements, refetchMovements, addMovement, sales, purchaseOrders, suppliers, customers, returns, companyInfo, notify, logAudit, role, setActiveModule }) {
   const [tab, setTab] = useState('all');
   const [search, setSearch] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('All');
@@ -2725,19 +3045,22 @@ function InventoryControlCenter({ t, products, setProducts, movements, addMoveme
     (p.name.toLowerCase().includes(search.toLowerCase()) || p.sku.toLowerCase().includes(search.toLowerCase()) || p.partNumber.toLowerCase().includes(search.toLowerCase()))
   );
 
-  const submitAdjustment = () => {
+  const [adjusting, setAdjusting] = useState(false);
+  const submitAdjustment = async () => {
     if (!adjForm.reason.trim() || adjForm.qty <= 0) { notify('Enter a quantity and a mandatory reason.', 'error'); return; }
     const product = products.find(p => p.id === +adjForm.productId);
-    const isDamage = adjForm.direction === 'Damage';
-    const delta = (adjForm.direction === 'Increase') ? +adjForm.qty : -adjForm.qty;
-    if (delta < 0 && product.stockQty + delta < 0) { notify('Cannot reduce stock below zero.', 'error'); return; }
-    setProducts(prev => prev.map(p => p.id === product.id ? { ...p, stockQty: p.stockQty + delta } : p));
-    const type = isDamage ? 'Adjustment-Damage' : 'Adjustment';
-    const ref = `ADJ-${nextId()} (${adjForm.reason})`;
-    addMovement(product.id, type, delta, ref);
-    logAudit({ action: `Stock adjustment on ${product.name}: ${delta > 0 ? '+' : ''}${delta} — ${adjForm.reason}`, module: 'Inventory Control Center', before: `Stock: ${product.stockQty}`, after: `Stock: ${product.stockQty + delta}` });
-    notify(`Adjustment recorded for ${product.name}.`);
-    setAdjForm({ productId: products[0]?.id, direction: 'Increase', qty: 1, reason: '' });
+    setAdjusting(true);
+    try {
+      const { product: updated } = await api.adjustStock(product.id, { direction: adjForm.direction, qty: +adjForm.qty, reason: adjForm.reason });
+      await Promise.all([refetchProducts(), refetchMovements()]);
+      logAudit({ action: `Stock adjustment on ${product.name}: ${adjForm.direction} ${adjForm.qty} — ${adjForm.reason}`, module: 'Inventory Control Center', before: `Stock: ${product.stockQty}`, after: `Stock: ${updated.stock_qty}` });
+      notify(`Adjustment recorded for ${product.name}.`);
+      setAdjForm({ productId: products[0]?.id, direction: 'Increase', qty: 1, reason: '' });
+    } catch (err) {
+      notify(err.message, 'error');
+    } finally {
+      setAdjusting(false);
+    }
   };
 
   const exportAllStock = () => downloadCSV('all-stock.csv', [['SKU', 'Name', 'Category', 'Qty', 'Min', 'Max', 'Cost', 'Sell', 'Value', 'Status'], ...filteredProducts.map(p => [p.sku, p.name, p.category, p.stockQty, p.reorderLevel, p.maxStock, p.costPrice, p.sellPrice, p.stockQty * p.costPrice, productStatus(p)])]);
@@ -2865,7 +3188,7 @@ function InventoryControlCenter({ t, products, setProducts, movements, addMoveme
             <Field t={t} label="Product"><TSelect t={t} disabled={!canAdjust} value={adjForm.productId} onChange={e => setAdjForm(f => ({ ...f, productId: e.target.value }))}>{products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</TSelect></Field>
             <Field t={t} label="Direction"><TSelect t={t} disabled={!canAdjust} value={adjForm.direction} onChange={e => setAdjForm(f => ({ ...f, direction: e.target.value }))}><option>Increase</option><option>Decrease</option><option>Damage</option></TSelect></Field>
             <Field t={t} label="Quantity"><TInput t={t} disabled={!canAdjust} type="number" value={adjForm.qty} onChange={e => setAdjForm(f => ({ ...f, qty: +e.target.value }))} /></Field>
-            <Btn t={t} variant="primary" disabled={!canAdjust} onClick={submitAdjustment}>Apply Adjustment</Btn>
+            <Btn t={t} variant="primary" disabled={!canAdjust || adjusting} onClick={submitAdjustment}>{adjusting ? 'Applying…' : 'Apply Adjustment'}</Btn>
           </div>
           <div className="mt-3"><Field t={t} label="Reason (mandatory)"><TInput t={t} disabled={!canAdjust} value={adjForm.reason} onChange={e => setAdjForm(f => ({ ...f, reason: e.target.value }))} placeholder="e.g. Physical count correction, warehouse damage…" /></Field></div>
           <div className="mt-5 pt-4" style={{ borderTop: `1px solid ${t.border}` }}>
@@ -3005,7 +3328,7 @@ function ProductDrilldown({ t, product, onClose, movements, sales, purchaseOrder
       </DrilldownSection>
 
       <DrilldownSection t={t} title={`Purchase History (${purchaseHistory.length})`}>
-        {purchaseHistory.map(po => <DrillRow key={po.id} t={t} left={po.date} mid={`${po.poNo} · ${po.supplierName}`} right={po.status} tone="steel" />)}
+        {purchaseHistory.map(po => <DrillRow key={po.id} t={t} left={(po.createdAt || '').slice(0, 10)} mid={`${po.poNo} · ${po.supplierName}`} right={po.status} tone="steel" />)}
         {purchaseHistory.length === 0 && <EmptyRow t={t} />}
       </DrilldownSection>
 
@@ -3100,7 +3423,7 @@ function StockManagement({ t, products, setProducts, movements, addMovement, com
   // is never part of this form; it's computed above and only ever rendered as text.
   const savePriceEdit = async (form) => {
     try {
-      const { product } = await api.updateProduct(form.id, { ...form, expectedUpdatedAt: form.updatedAt });
+      const { product } = await api.updateProduct(form.id, { ...form, rack: form.location, expectedUpdatedAt: form.updatedAt });
       const mapped = productFromApi(product);
       const old = products.find(p => p.id === form.id);
       setProducts(prev => prev.map(p => p.id === mapped.id ? mapped : p));
