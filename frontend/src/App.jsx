@@ -217,6 +217,7 @@ const api = {
   updateProduct: (id, product) => apiRequest(`/products/${id}`, { method: 'PUT', body: product }),
   adjustStock: (id, body) => apiRequest(`/products/${id}/adjust`, { method: 'POST', body }),
   listMovements: (params = {}) => apiRequest(`/products/movements/all?${new URLSearchParams(params)}`),
+  getProductQr: (id) => apiRequest(`/barcode/${id}/qr`),
 
   listReturns: (params = {}) => apiRequest(`/returns?${new URLSearchParams(params)}`),
   createReturn: (body) => apiRequest('/returns', { method: 'POST', body }),
@@ -983,7 +984,7 @@ export default function App() {
    */
   useEffect(() => {
     if (!currentUser) return;
-    const onFocus = () => { refetchProducts(); refetchSales(); refetchCustomers(); refetchSuppliers(); refetchPurchaseOrders(); };
+    const onFocus = () => { refetchProducts(); refetchSales(); refetchCustomers(); refetchSuppliers(); refetchPurchaseOrders(); refetchMovements(); };
     window.addEventListener('focus', onFocus);
     const stockPoll = setInterval(refetchProducts, 20000);
     return () => { window.removeEventListener('focus', onFocus); clearInterval(stockPoll); };
@@ -1098,10 +1099,10 @@ export default function App() {
           {activeModule === 'inventory' && <Inventory {...ctx} products={products} setProducts={setProducts} productsLoading={productsLoading} refetchProducts={refetchProducts} movements={movements} />}
           {activeModule === 'icc' && <InventoryControlCenter {...ctx} products={products} refetchProducts={refetchProducts} movements={movements} refetchMovements={refetchMovements} sales={sales} purchaseOrders={purchaseOrders} suppliers={suppliers} customers={customers} returns={returns} />}
           {activeModule === 'stockmgmt' && <StockManagement {...ctx} products={products} setProducts={setProducts} movements={movements} />}
-          {activeModule === 'pos' && <POS {...ctx} products={products} setProducts={setProducts} refetchProducts={refetchProducts} customers={customers} setCustomers={setCustomers} sales={sales} setSales={setSales} />}
+          {activeModule === 'pos' && <POS {...ctx} products={products} setProducts={setProducts} refetchProducts={refetchProducts} refetchMovements={refetchMovements} customers={customers} setCustomers={setCustomers} sales={sales} setSales={setSales} />}
           {activeModule === 'documents' && <Documents {...ctx} sales={sales} customers={customers} products={products} quotations={quotations} refetchQuotations={refetchQuotations} />}
           {activeModule === 'whatsapp' && <WhatsAppModule {...ctx} customers={customers} sales={sales} />}
-          {activeModule === 'purchasing' && <Purchasing {...ctx} suppliers={suppliers} products={products} purchaseOrders={purchaseOrders} refetchPurchaseOrders={refetchPurchaseOrders} refetchProducts={refetchProducts} refetchSuppliers={refetchSuppliers} />}
+          {activeModule === 'purchasing' && <Purchasing {...ctx} suppliers={suppliers} products={products} purchaseOrders={purchaseOrders} refetchPurchaseOrders={refetchPurchaseOrders} refetchProducts={refetchProducts} refetchSuppliers={refetchSuppliers} refetchMovements={refetchMovements} />}
           {activeModule === 'customers' && <Customers {...ctx} customers={customers} setCustomers={setCustomers} refetchCustomers={refetchCustomers} sales={sales} setSales={setSales} refetchSales={refetchSales} />}
           {activeModule === 'suppliers' && <Suppliers {...ctx} suppliers={suppliers} refetchSuppliers={refetchSuppliers} purchaseOrders={purchaseOrders} />}
           {activeModule === 'returns' && <ReturnsModule {...ctx} products={products} refetchProducts={refetchProducts} sales={sales} customers={customers} refetchCustomers={refetchCustomers} suppliers={suppliers} refetchSuppliers={refetchSuppliers} returns={returns} refetchReturns={refetchReturns} />}
@@ -1312,7 +1313,24 @@ function Inventory({ t, products, setProducts, movements, companyInfo, notify, l
   const [category, setCategory] = useState('All');
   const [modal, setModal] = useState(null); // 'add' | product for edit
   const [historyProduct, setHistoryProduct] = useState(null);
+  const [qrProduct, setQrProduct] = useState(null);
+  const [qrData, setQrData] = useState(null);
+  const [qrLoading, setQrLoading] = useState(false);
   const canEdit = ['Admin', 'Manager', 'Inventory'].includes(role);
+
+  const openQr = async (product) => {
+    setQrProduct(product);
+    setQrLoading(true);
+    try {
+      const data = await api.getProductQr(product.id);
+      setQrData(data);
+    } catch (err) {
+      notify(err.message, 'error');
+      setQrProduct(null);
+    } finally {
+      setQrLoading(false);
+    }
+  };
 
   const filtered = products.filter(p =>
     (category === 'All' || p.category === category) &&
@@ -1396,6 +1414,7 @@ function Inventory({ t, products, setProducts, movements, companyInfo, notify, l
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-1.5">
                       <button title="Stock history" onClick={() => setHistoryProduct(p)}><History size={15} style={{ color: t.textFaint }} /></button>
+                      <button title="Print QR / barcode label" onClick={() => openQr(p)}><QrCode size={15} style={{ color: t.textFaint }} /></button>
                       {canEdit && <button title="Edit" onClick={() => setModal(p)}><Pencil size={15} style={{ color: t.textFaint }} /></button>}
                     </div>
                   </td>
@@ -1434,6 +1453,23 @@ function Inventory({ t, products, setProducts, movements, companyInfo, notify, l
               </tbody>
             </table>
           </div>
+        </Modal>
+      )}
+
+      {qrProduct && (
+        <Modal t={t} title={`QR / Barcode — ${qrProduct.name}`} onClose={() => { setQrProduct(null); setQrData(null); }}
+          footer={<Btn t={t} variant="primary" icon={Printer} disabled={qrLoading || !qrData} onClick={() => window.print()}>Print Label</Btn>}>
+          {qrLoading && <p className="text-sm" style={{ color: t.textMuted }}>Generating…</p>}
+          {qrData && (
+            <div id="print-area" className="flex flex-col items-center gap-2 p-4 rounded-md" style={{ background: '#fff' }}>
+              <div dangerouslySetInnerHTML={{ __html: qrData.qrSvg }} />
+              <div className="text-center" style={{ color: '#000' }}>
+                <div className="text-sm font-semibold">{qrData.name}</div>
+                <div className="text-xs" style={{ fontFamily: "'JetBrains Mono',monospace" }}>{qrData.sku} · {qrData.barcode}</div>
+              </div>
+            </div>
+          )}
+          <p className="text-xs mt-3" style={{ color: t.textFaint }}>Scanning this at POS or during receiving looks up this exact product — safe to print and stick on the item or its shelf.</p>
         </Modal>
       )}
     </div>
@@ -1493,7 +1529,7 @@ function ProductModal({ t, initial, onClose, onSave, isNew }) {
 }
 
 /* ============================== POS ============================== */
-function POS({ t, products, setProducts, refetchProducts, customers, setCustomers, sales, setSales, companyInfo, notify, logAudit, addMovement, role }) {
+function POS({ t, products, setProducts, refetchProducts, refetchMovements, customers, setCustomers, sales, setSales, companyInfo, notify, logAudit, addMovement, role }) {
   const [search, setSearch] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('All');
   const [cart, setCart] = useState([]);
@@ -1554,6 +1590,7 @@ function POS({ t, products, setProducts, refetchProducts, customers, setCustomer
       };
       setSales(prev => [receiptData, ...prev]);
       await refetchProducts(); // stock was deducted server-side; reload real quantities rather than guessing locally
+      await refetchMovements(); // Stock Management's Stock In/Out reads from this — must refresh or it stays stale until next login
       logAudit({ action: `Completed sale ${sale.invoice_no}`, module: 'POS', before: '-', after: money(Number(sale.total), companyInfo.currency) });
       notify(`Sale ${sale.invoice_no} completed successfully.`);
       setReceipt(receiptData);
@@ -2170,7 +2207,7 @@ function QuotationPrintable({ quote, companyInfo }) {
 }
 
 /* ============================== PURCHASING ============================== */
-function Purchasing({ t, suppliers, products, purchaseOrders, refetchPurchaseOrders, refetchProducts, refetchSuppliers, companyInfo, notify, logAudit }) {
+function Purchasing({ t, suppliers, products, purchaseOrders, refetchPurchaseOrders, refetchProducts, refetchSuppliers, refetchMovements, companyInfo, notify, logAudit }) {
   const [modal, setModal] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [receivingId, setReceivingId] = useState(null);
@@ -2210,7 +2247,7 @@ function Purchasing({ t, suppliers, products, purchaseOrders, refetchPurchaseOrd
     setReceivingId(po.id);
     try {
       const { purchaseOrder } = await api.receivePurchaseOrder(po.id, { lines });
-      await Promise.all([refetchPurchaseOrders(), refetchProducts(), refetchSuppliers()]);
+      await Promise.all([refetchPurchaseOrders(), refetchProducts(), refetchSuppliers(), refetchMovements()]);
       logAudit({ action: `Received ${po.poNo} (${purchaseOrder.grn_no})`, module: 'Purchasing', before: po.status, after: purchaseOrder.status });
       notify(`${po.poNo} received and stock updated (${purchaseOrder.grn_no}).`);
     } catch (err) {
