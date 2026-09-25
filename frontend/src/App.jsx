@@ -109,9 +109,20 @@ async function apiRequest(path, { method = 'GET', body, auth = true, retry = tru
 // expectedUpdatedAt and fails forever, which is exactly the "try again — still fails" bug this
 // fixes: reload the fresh row from the conflict response, resend the same intended changes
 // against it, and only surface an error if that second attempt also fails.
-async function resolveConflictAndRetry(err, retryFn) {
+// Bounded to 3 total attempts (the original call plus up to 2 retries here) — under normal
+// use one retry is always enough, but if something is actively touching the same row (a busy
+// stock receipt, another person editing at the same instant), a single retry can itself lose
+// the race. Backing off after a fixed number of tries avoids ever retrying forever.
+async function resolveConflictAndRetry(err, retryFn, attempt = 1) {
   if (err.status !== 409 || !err.current) throw err;
-  return retryFn(err.current);
+  try {
+    return await retryFn(err.current);
+  } catch (retryErr) {
+    if (attempt < 3 && retryErr.status === 409 && retryErr.current) {
+      return resolveConflictAndRetry(retryErr, retryFn, attempt + 1);
+    }
+    throw retryErr;
+  }
 }
 
 function userFromApi(row) {
@@ -1693,7 +1704,7 @@ function POS({ t, products, setProducts, refetchProducts, refetchMovements, cust
     setCustomerModal(c);
   };
   const saveCustomerInline = async () => {
-    if (!customerForm.name || !customerForm.phone) { notify('Name and phone are required.', 'error'); return; }
+    if (!customerForm.name?.trim()) { notify('Customer name is required.', 'error'); return; }
     setSavingCustomer(true);
     try {
       if (customerModal === 'add') {
@@ -1911,7 +1922,7 @@ function POS({ t, products, setProducts, refetchProducts, refetchMovements, cust
           </>}>
           <div className="flex flex-col gap-3">
             <Field t={t} label="Full Name *"><TInput t={t} value={customerForm.name} onChange={e => setCustomerForm(f => ({ ...f, name: e.target.value }))} /></Field>
-            <Field t={t} label="Phone *"><TInput t={t} value={customerForm.phone} onChange={e => setCustomerForm(f => ({ ...f, phone: e.target.value }))} /></Field>
+            <Field t={t} label="Phone"><TInput t={t} value={customerForm.phone} onChange={e => setCustomerForm(f => ({ ...f, phone: e.target.value }))} /></Field>
             <Field t={t} label="Email"><TInput t={t} value={customerForm.email} onChange={e => setCustomerForm(f => ({ ...f, email: e.target.value }))} /></Field>
             <Field t={t} label="Credit Limit"><TInput t={t} type="number" value={customerForm.creditLimit} onChange={e => setCustomerForm(f => ({ ...f, creditLimit: +e.target.value }))} /></Field>
           </div>
@@ -2548,7 +2559,7 @@ function Customers({ t, customers, setCustomers, refetchCustomers, sales, setSal
   const canEditStatement = isOwner || role === 'Manager';
 
   const addCustomer = async () => {
-    if (!form.name || !form.phone) { notify('Name and phone are required.', 'error'); return; }
+    if (!form.name?.trim()) { notify('Customer name is required.', 'error'); return; }
     try {
       await api.createCustomer(form);
       await refetchCustomers();
@@ -2648,7 +2659,7 @@ function Customers({ t, customers, setCustomers, refetchCustomers, sales, setSal
           </>}>
           <div className="flex flex-col gap-3">
             <Field t={t} label="Full Name *"><TInput t={t} value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} /></Field>
-            <Field t={t} label="Phone *"><TInput t={t} value={form.phone} onChange={e => setForm(f => ({ ...f, phone: e.target.value }))} /></Field>
+            <Field t={t} label="Phone"><TInput t={t} value={form.phone} onChange={e => setForm(f => ({ ...f, phone: e.target.value }))} /></Field>
             <Field t={t} label="Email"><TInput t={t} value={form.email} onChange={e => setForm(f => ({ ...f, email: e.target.value }))} /></Field>
             <Field t={t} label="Credit Limit"><TInput t={t} type="number" value={form.creditLimit} onChange={e => setForm(f => ({ ...f, creditLimit: +e.target.value }))} /></Field>
           </div>
