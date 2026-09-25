@@ -91,8 +91,27 @@ async function apiRequest(path, { method = 'GET', body, auth = true, retry = tru
 
   let data = null;
   try { data = await res.json(); } catch { /* empty body, e.g. 204 */ }
-  if (!res.ok) throw new Error(data?.error || `Request failed (${res.status})`);
+  if (!res.ok) {
+    const err = new Error(data?.error || `Request failed (${res.status})`);
+    // Carries the HTTP status and (for a 409 optimistic-concurrency conflict) the server's
+    // current row, so a caller can silently refresh and retry the same edit instead of just
+    // failing — see resolveConflictAndRetry below.
+    err.status = res.status;
+    if (data?.current) err.current = data.current;
+    throw err;
+  }
   return data;
+}
+
+// A 409 here means the record's updated_at moved since the form was loaded — usually because
+// something else (a stock receipt, another edit) touched the SAME row a moment ago, not a real
+// simultaneous edit. Without this, the user's retry keeps sending the same stale
+// expectedUpdatedAt and fails forever, which is exactly the "try again — still fails" bug this
+// fixes: reload the fresh row from the conflict response, resend the same intended changes
+// against it, and only surface an error if that second attempt also fails.
+async function resolveConflictAndRetry(err, retryFn) {
+  if (err.status !== 409 || !err.current) throw err;
+  return retryFn(err.current);
 }
 
 function userFromApi(row) {
@@ -258,6 +277,23 @@ const api = {
   listPurchaseOrders: (params = {}) => apiRequest(`/purchasing?${new URLSearchParams(params)}`),
   createPurchaseOrder: (po) => apiRequest('/purchasing', { method: 'POST', body: po }),
   receivePurchaseOrder: (id, body) => apiRequest(`/purchasing/${id}/receive`, { method: 'POST', body }),
+
+  listBackups: () => apiRequest('/backups'),
+  createBackup: (label) => apiRequest('/backups', { method: 'POST', body: label ? { label } : {} }),
+  restoreBackup: (id) => apiRequest(`/backups/${id}/restore`, { method: 'POST', body: { confirm: 'RESTORE' } }),
+  // Not a plain apiRequest — download needs the raw file with auth headers attached, since it's
+  // not a plain link the browser can just navigate to (the API requires a Bearer token).
+  downloadBackup: async (id, filenameHint) => {
+    const token = getToken();
+    const res = await fetch(`${API_BASE}/backups/${id}/download`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+    if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || `Download failed (${res.status})`); }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filenameHint || `roplant-backup-${id}.json`;
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  },
 };
 
 /* ============================== MOCK DATA ============================== */
@@ -1028,6 +1064,12 @@ export default function App() {
   return (
     <div style={{ fontFamily: "'Inter',sans-serif", background: t.bg, color: t.text, minHeight: '600px' }} className="w-full flex rounded-xl overflow-hidden">
       <style>{`${FONT_IMPORT} * { box-sizing: border-box; } ::-webkit-scrollbar{width:8px;height:8px;} ::-webkit-scrollbar-thumb{background:${t.border};border-radius:4px;}
+        /* Data tables (Products, Customers, Quotations, Invoices, etc.) get column separators
+           to match the row separators they already had — a proper grid, not just stripes.
+           Printable documents (quotations/invoices) set their own inline cell borders, which
+           always win over this, so the letterhead layout is unaffected. */
+        table td, table th { border-right: 1px solid ${t.border}; }
+        table td:last-child, table th:last-child { border-right: none; }
         @media print {
           body * { visibility: hidden !important; }
           #print-area, #print-area * { visibility: visible !important; }
@@ -1100,7 +1142,7 @@ export default function App() {
           {activeModule === 'inventory' && <Inventory {...ctx} products={products} setProducts={setProducts} productsLoading={productsLoading} refetchProducts={refetchProducts} movements={movements} />}
           {activeModule === 'icc' && <InventoryControlCenter {...ctx} products={products} refetchProducts={refetchProducts} movements={movements} refetchMovements={refetchMovements} sales={sales} purchaseOrders={purchaseOrders} suppliers={suppliers} customers={customers} returns={returns} />}
           {activeModule === 'stockmgmt' && <StockManagement {...ctx} products={products} setProducts={setProducts} movements={movements} />}
-          {activeModule === 'pos' && <POS {...ctx} products={products} setProducts={setProducts} refetchProducts={refetchProducts} refetchMovements={refetchMovements} customers={customers} setCustomers={setCustomers} sales={sales} setSales={setSales} />}
+          {activeModule === 'pos' && <POS {...ctx} products={products} setProducts={setProducts} refetchProducts={refetchProducts} refetchMovements={refetchMovements} customers={customers} setCustomers={setCustomers} refetchCustomers={refetchCustomers} sales={sales} setSales={setSales} />}
           {activeModule === 'documents' && <Documents {...ctx} sales={sales} customers={customers} products={products} quotations={quotations} refetchQuotations={refetchQuotations} />}
           {activeModule === 'whatsapp' && <WhatsAppModule {...ctx} customers={customers} sales={sales} />}
           {activeModule === 'purchasing' && <Purchasing {...ctx} suppliers={suppliers} products={products} purchaseOrders={purchaseOrders} refetchPurchaseOrders={refetchPurchaseOrders} refetchProducts={refetchProducts} refetchSuppliers={refetchSuppliers} refetchMovements={refetchMovements} />}
@@ -1395,7 +1437,17 @@ function Inventory({ t, products, setProducts, productsLoading, refetchProducts,
         logAudit({ action: `Created product ${mapped.name}`, module: 'Products & Inventory', before: '-', after: `Stock: ${mapped.stockQty}` });
         notify(`Product "${mapped.name}" added with SKU ${mapped.sku}.`);
       } else {
-        const { product } = await api.updateProduct(data.id, { ...data, rack: data.location, expectedUpdatedAt: data.updatedAt });
+        let product;
+        try {
+          ({ product } = await api.updateProduct(data.id, { ...data, rack: data.location, expectedUpdatedAt: data.updatedAt }));
+        } catch (err) {
+          // Someone/something else (e.g. a purchase receipt touching this same product) bumped
+          // updated_at after the form loaded. Retry once against the fresh row instead of making
+          // the user close and reopen the modal — the edit they typed is still applied.
+          ({ product } = await resolveConflictAndRetry(err, (current) =>
+            api.updateProduct(data.id, { ...data, rack: data.location, expectedUpdatedAt: current.updated_at })
+          ));
+        }
         const mapped = productFromApi(product);
         setProducts(prev => prev.map(p => p.id === mapped.id ? mapped : p));
         logAudit({ action: `Edited ${mapped.name}`, module: 'Products & Inventory', before: `Sell: ${companyInfo.currency} ${fmt(data.sellPrice)}`, after: `Sell: ${companyInfo.currency} ${fmt(mapped.sellPrice)}` });
@@ -1617,7 +1669,7 @@ function ProductModal({ t, initial, onClose, onSave, isNew, products }) {
 }
 
 /* ============================== POS ============================== */
-function POS({ t, products, setProducts, refetchProducts, refetchMovements, customers, setCustomers, sales, setSales, companyInfo, notify, logAudit, addMovement, role }) {
+function POS({ t, products, setProducts, refetchProducts, refetchMovements, customers, setCustomers, refetchCustomers, sales, setSales, companyInfo, notify, logAudit, addMovement, role }) {
   const [search, setSearch] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('All');
   const [cart, setCart] = useState([]);
@@ -1626,6 +1678,54 @@ function POS({ t, products, setProducts, refetchProducts, refetchMovements, cust
   const [payment, setPayment] = useState('Cash');
   const [receipt, setReceipt] = useState(null);
   const [scanOpen, setScanOpen] = useState(false);
+
+  // Add/edit a customer without leaving POS — so a cashier mid-sale doesn't have to abandon the
+  // cart, go to Customers, add them, then come back. Shares the same api + setCustomers state as
+  // the Customers page, so a customer added or fixed here shows up there immediately, and vice versa.
+  const [customerModal, setCustomerModal] = useState(null); // null | 'add' | customer object being edited
+  const [customerForm, setCustomerForm] = useState({ name: '', phone: '', email: '', creditLimit: 0 });
+  const [savingCustomer, setSavingCustomer] = useState(false);
+  const openAddCustomer = () => { setCustomerForm({ name: '', phone: '', email: '', creditLimit: 0 }); setCustomerModal('add'); };
+  const openEditCustomer = () => {
+    const c = customers.find(x => x.id === customerId);
+    if (!c) return;
+    setCustomerForm({ name: c.name, phone: c.phone, email: c.email, creditLimit: c.creditLimit });
+    setCustomerModal(c);
+  };
+  const saveCustomerInline = async () => {
+    if (!customerForm.name || !customerForm.phone) { notify('Name and phone are required.', 'error'); return; }
+    setSavingCustomer(true);
+    try {
+      if (customerModal === 'add') {
+        const { customer } = await api.createCustomer(customerForm);
+        const mapped = customerFromApi(customer);
+        setCustomers(prev => [...prev, mapped]);
+        logAudit({ action: `Added customer ${mapped.name}`, module: 'POS', before: '-', after: mapped.name });
+        notify(`Customer "${mapped.name}" added.`);
+        setCustomerId(mapped.id);
+      } else {
+        const editing = customerModal;
+        let customer;
+        try {
+          ({ customer } = await api.updateCustomer(editing.id, { ...customerForm, expectedUpdatedAt: editing.updatedAt }));
+        } catch (err) {
+          ({ customer } = await resolveConflictAndRetry(err, (current) =>
+            api.updateCustomer(editing.id, { ...customerForm, expectedUpdatedAt: current.updated_at })
+          ));
+        }
+        const mapped = customerFromApi(customer);
+        setCustomers(prev => prev.map(c => c.id === mapped.id ? mapped : c));
+        logAudit({ action: `Edited customer ${mapped.name}`, module: 'POS', before: editing.name, after: mapped.name });
+        notify(`${mapped.name} updated.`);
+      }
+      if (refetchCustomers) refetchCustomers();
+      setCustomerModal(null);
+    } catch (err) {
+      notify(err.message, 'error');
+    } finally {
+      setSavingCustomer(false);
+    }
+  };
 
   // Starts from the FULL product list — every item in inventory is browsable here, active
   // or out of stock alike (out-of-stock items still show, just dimmed and unclickable).
@@ -1709,21 +1809,38 @@ function POS({ t, products, setProducts, refetchProducts, refetchMovements, cust
           </div>
           <p className="text-xs" style={{ color: t.textFaint }}>Showing {filtered.length} of {products.length} products{categoryFilter !== 'All' ? ` in ${categoryFilter}` : ''}.</p>
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 max-h-[520px] overflow-y-auto pr-1">
-            {filtered.map(p => (
-              <Card key={p.id} t={t} className="p-3 cursor-pointer" style={{ opacity: p.stockQty <= 0 ? 0.5 : 1 }}>
-                <div onClick={() => addToCart(p)}>
-                  <div className="w-full aspect-square rounded-md overflow-hidden mb-2" style={{ background: t.surfaceAlt }}>
-                    <ProductThumb t={t} product={p} size="100%" rounded="" />
+            {filtered.map(p => {
+              const inCart = cart.find(i => i.productId === p.id);
+              return (
+                <Card key={p.id} t={t} className="p-3 cursor-pointer relative transition-all"
+                  style={{
+                    opacity: p.stockQty <= 0 ? 0.5 : 1,
+                    outline: inCart ? `2px solid ${t.accent}` : '2px solid transparent',
+                    background: inCart ? (t.accentSoft || t.surfaceAlt) : undefined,
+                  }}>
+                  {inCart && (
+                    <div className="absolute top-2 right-2 z-10 flex items-center justify-center rounded-full text-xs font-bold"
+                      style={{ background: t.accent, color: '#fff', width: 20, height: 20 }}>{inCart.qty}</div>
+                  )}
+                  <div onClick={() => addToCart(p)}>
+                    <div className="w-full aspect-square rounded-md overflow-hidden mb-2 relative" style={{ background: t.surfaceAlt }}>
+                      <ProductThumb t={t} product={p} size="100%" rounded="" />
+                      {inCart && (
+                        <div className="absolute inset-0 flex items-center justify-center" style={{ background: 'rgba(0,0,0,0.25)' }}>
+                          <CheckCircle2 size={28} style={{ color: '#fff' }} />
+                        </div>
+                      )}
+                    </div>
+                    <div className="text-sm font-medium leading-tight">{p.name}{inCart && <span className="ml-1.5 font-normal" style={{ color: t.accent }}>· In cart</span>}</div>
+                    <div className="text-xs mb-1" style={{ color: t.textFaint, fontFamily: "'JetBrains Mono',monospace" }}>{p.sku}</div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm font-semibold">{fmt(p.sellPrice)}</span>
+                      <Badge t={t} tone={p.stockQty <= p.reorderLevel ? 'danger' : 'success'}>{p.stockQty} left</Badge>
+                    </div>
                   </div>
-                  <div className="text-sm font-medium leading-tight">{p.name}</div>
-                  <div className="text-xs mb-1" style={{ color: t.textFaint, fontFamily: "'JetBrains Mono',monospace" }}>{p.sku}</div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm font-semibold">{fmt(p.sellPrice)}</span>
-                    <Badge t={t} tone={p.stockQty <= p.reorderLevel ? 'danger' : 'success'}>{p.stockQty} left</Badge>
-                  </div>
-                </div>
-              </Card>
-            ))}
+                </Card>
+              );
+            })}
           </div>
         </div>
 
@@ -1747,7 +1864,13 @@ function POS({ t, products, setProducts, refetchProducts, refetchMovements, cust
             ))}
           </div>
           <div style={{ borderTop: `1px solid ${t.border}` }} className="pt-3 flex flex-col gap-2">
-            <Field t={t} label="Customer"><TSelect t={t} value={customerId} onChange={e => setCustomerId(+e.target.value)}>{customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</TSelect></Field>
+            <Field t={t} label="Customer">
+              <div className="flex items-center gap-1.5">
+                <div className="flex-1"><TSelect t={t} value={customerId} onChange={e => setCustomerId(+e.target.value)}>{customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</TSelect></div>
+                <button type="button" title="Add new customer" onClick={openAddCustomer} className="p-2 rounded-md shrink-0" style={{ background: t.surfaceAlt, border: `1px solid ${t.border}` }}><Plus size={14} style={{ color: t.textFaint }} /></button>
+                <button type="button" title="Edit selected customer" onClick={openEditCustomer} disabled={!customerId} className="p-2 rounded-md shrink-0" style={{ background: t.surfaceAlt, border: `1px solid ${t.border}`, opacity: customerId ? 1 : 0.5 }}><Pencil size={14} style={{ color: t.textFaint }} /></button>
+              </div>
+            </Field>
             <div className="grid grid-cols-2 gap-2">
               <Field t={t} label="Discount %"><TInput t={t} type="number" value={discount} onChange={e => setDiscount(+e.target.value)} /></Field>
               <Field t={t} label="Payment"><TSelect t={t} value={payment} onChange={e => setPayment(e.target.value)}><option>Cash</option><option>Card</option><option>Mobile Money</option><option>Credit</option></TSelect></Field>
@@ -1779,6 +1902,21 @@ function POS({ t, products, setProducts, refetchProducts, refetchMovements, cust
       )}
 
       {scanOpen && <ScanModal t={t} onClose={() => setScanOpen(false)} onConfirm={(p) => { addToCart(p); notify(`${p.name} verified and added to cart.`); setScanOpen(false); }} findByCode={findByCode} products={products} />}
+
+      {customerModal && (
+        <Modal t={t} title={customerModal === 'add' ? 'Add Customer' : `Edit ${customerModal.name}`} onClose={() => setCustomerModal(null)}
+          footer={<>
+            <Btn t={t} variant="secondary" onClick={() => setCustomerModal(null)}>Cancel</Btn>
+            <Btn t={t} variant="primary" onClick={saveCustomerInline} disabled={savingCustomer}>{savingCustomer ? 'Saving…' : (customerModal === 'add' ? 'Add Customer' : 'Save Changes')}</Btn>
+          </>}>
+          <div className="flex flex-col gap-3">
+            <Field t={t} label="Full Name *"><TInput t={t} value={customerForm.name} onChange={e => setCustomerForm(f => ({ ...f, name: e.target.value }))} /></Field>
+            <Field t={t} label="Phone *"><TInput t={t} value={customerForm.phone} onChange={e => setCustomerForm(f => ({ ...f, phone: e.target.value }))} /></Field>
+            <Field t={t} label="Email"><TInput t={t} value={customerForm.email} onChange={e => setCustomerForm(f => ({ ...f, email: e.target.value }))} /></Field>
+            <Field t={t} label="Credit Limit"><TInput t={t} type="number" value={customerForm.creditLimit} onChange={e => setCustomerForm(f => ({ ...f, creditLimit: +e.target.value }))} /></Field>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }
@@ -2424,7 +2562,15 @@ function Customers({ t, customers, setCustomers, refetchCustomers, sales, setSal
 
   const saveEdit = async () => {
     try {
-      await api.updateCustomer(editingCustomer.id, { ...form, expectedUpdatedAt: editingCustomer.updatedAt });
+      try {
+        await api.updateCustomer(editingCustomer.id, { ...form, expectedUpdatedAt: editingCustomer.updatedAt });
+      } catch (err) {
+        // Same self-healing retry as products: a stale updated_at (e.g. a payment posted to
+        // this customer moments ago) shouldn't force the user to reopen the edit form and retype.
+        await resolveConflictAndRetry(err, (current) =>
+          api.updateCustomer(editingCustomer.id, { ...form, expectedUpdatedAt: current.updated_at })
+        );
+      }
       await refetchCustomers();
       logAudit({ action: `Edited customer ${form.name}`, module: 'Customers', before: editingCustomer.name, after: form.name });
       notify(`${form.name} updated.`);
@@ -2577,7 +2723,13 @@ function Suppliers({ t, suppliers, refetchSuppliers, purchaseOrders, companyInfo
 
   const saveEdit = async () => {
     try {
-      await api.updateSupplier(editingSupplier.id, { ...form, expectedUpdatedAt: editingSupplier.updatedAt });
+      try {
+        await api.updateSupplier(editingSupplier.id, { ...form, expectedUpdatedAt: editingSupplier.updatedAt });
+      } catch (err) {
+        await resolveConflictAndRetry(err, (current) =>
+          api.updateSupplier(editingSupplier.id, { ...form, expectedUpdatedAt: current.updated_at })
+        );
+      }
       await refetchSuppliers();
       logAudit({ action: `Edited supplier ${form.name}`, module: 'Suppliers', before: editingSupplier.name, after: form.name });
       notify(`${form.name} updated.`);
@@ -3042,11 +3194,12 @@ function UserEditModal({ t, user, onClose, onSave, validRoles, saving }) {
 }
 
 /* ============================== SETTINGS ============================== */
-function SettingsPage({ t, companyInfo, setCompanyInfo, notify, role, logout, setConfirm }) {
+function SettingsPage({ t, companyInfo, setCompanyInfo, notify, role, logout, setConfirm, currentUser }) {
   const [form, setForm] = useState(companyInfo);
   const [saving, setSaving] = useState(false);
   const [clearing, setClearing] = useState(false);
   const canEdit = role === 'Admin';
+  const isOwner = !!currentUser?.isOwner;
   useEffect(() => setForm(companyInfo), [companyInfo]); // keep the form in sync once the real fetch resolves
   const save = async () => {
     setSaving(true);
@@ -3107,6 +3260,72 @@ function SettingsPage({ t, companyInfo, setCompanyInfo, notify, role, logout, se
       logout();
     },
   });
+
+  // ---- Backups (owner-only): daily automatic snapshots kept ~30 days, plus manual backups
+  // on demand. Restore is destructive — it replaces every business record with the snapshot's
+  // — so it requires typing a confirmation phrase, not just a click, and the server always
+  // takes a safety snapshot of the current state first.
+  const [backups, setBackups] = useState([]);
+  const [backupsLoading, setBackupsLoading] = useState(false);
+  const [backingUp, setBackingUp] = useState(false);
+  const [downloadingId, setDownloadingId] = useState(null);
+  const [restoreTarget, setRestoreTarget] = useState(null);
+  const [restoreText, setRestoreText] = useState('');
+  const [restoring, setRestoring] = useState(false);
+
+  const refetchBackups = async () => {
+    if (!isOwner) return;
+    setBackupsLoading(true);
+    try {
+      const data = await api.listBackups();
+      setBackups(data.backups || []);
+    } catch (err) {
+      notify(err.message, 'error');
+    } finally {
+      setBackupsLoading(false);
+    }
+  };
+  useEffect(() => { refetchBackups(); }, [isOwner]);
+
+  const runBackupNow = async () => {
+    setBackingUp(true);
+    try {
+      await api.createBackup();
+      notify('Backup created.');
+      await refetchBackups();
+    } catch (err) {
+      notify(err.message, 'error');
+    } finally {
+      setBackingUp(false);
+    }
+  };
+
+  const downloadOne = async (b) => {
+    setDownloadingId(b.id);
+    try {
+      await api.downloadBackup(b.id, `roplant-backup-${(b.created_at || '').slice(0, 10)}-${b.id}.json`);
+    } catch (err) {
+      notify(err.message, 'error');
+    } finally {
+      setDownloadingId(null);
+    }
+  };
+
+  const runRestore = async () => {
+    if (!restoreTarget) return;
+    setRestoring(true);
+    try {
+      await api.restoreBackup(restoreTarget.id);
+      notify(`Restored to "${restoreTarget.label}". A safety backup of the previous data was created automatically.`);
+      setRestoreTarget(null);
+      setRestoreText('');
+      await refetchBackups();
+    } catch (err) {
+      notify(err.message, 'error');
+    } finally {
+      setRestoring(false);
+    }
+  };
 
   return (
     <div className="flex flex-col gap-4 max-w-2xl">
@@ -3186,6 +3405,68 @@ function SettingsPage({ t, companyInfo, setCompanyInfo, notify, role, logout, se
           <Btn t={t} variant="danger" onClick={confirmLogoutAll} disabled={signingOutAll}>{signingOutAll ? 'Signing out…' : 'Sign Out Everywhere'}</Btn>
         </div>
       </Card>
+
+      {isOwner && (
+        <Card t={t} className="p-5 flex flex-col gap-3">
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <div>
+              <h3 className="font-semibold text-sm" style={{ fontFamily: "'Space Grotesk',sans-serif" }}>Backup & Recovery</h3>
+              <p className="text-xs mt-1" style={{ color: t.textFaint }}>
+                A full snapshot of every product, customer, sale, purchase and other business record is taken automatically once a day and kept for about 30 days. Only you, as the owner, can download or restore one.
+              </p>
+            </div>
+            <Btn t={t} variant="primary" onClick={runBackupNow} disabled={backingUp}>{backingUp ? 'Backing up…' : 'Back Up Now'}</Btn>
+          </div>
+
+          {backupsLoading ? (
+            <p className="text-xs" style={{ color: t.textFaint }}>Loading backups…</p>
+          ) : backups.length === 0 ? (
+            <p className="text-xs" style={{ color: t.textFaint }}>No backups yet — the first daily backup is taken shortly after the server starts.</p>
+          ) : (
+            <div className="flex flex-col gap-2">
+              {backups.map(b => (
+                <div key={b.id} className="flex items-center justify-between p-3 rounded-md flex-wrap gap-2" style={{ background: t.surfaceAlt }}>
+                  <div>
+                    <div className="text-sm font-medium flex items-center gap-2">
+                      {b.label}
+                      <Badge t={t} tone={b.kind === 'daily' ? 'steel' : b.kind === 'manual' ? 'accent' : 'warning'}>{b.kind === 'pre_restore_safety' ? 'safety' : b.kind}</Badge>
+                    </div>
+                    <div className="text-xs" style={{ color: t.textFaint }}>
+                      {(b.created_at || '').replace('T', ' ').slice(0, 16)} · {Object.values(b.row_counts || {}).reduce((s, n) => s + n, 0)} total records
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Btn t={t} variant="secondary" onClick={() => downloadOne(b)} disabled={downloadingId === b.id}>
+                      {downloadingId === b.id ? 'Downloading…' : 'Download'}
+                    </Btn>
+                    <Btn t={t} variant="danger" onClick={() => { setRestoreTarget(b); setRestoreText(''); }}>Restore</Btn>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </Card>
+      )}
+
+      {restoreTarget && (
+        <Modal t={t} title="Restore from backup" onClose={() => { setRestoreTarget(null); setRestoreText(''); }}
+          footer={<>
+            <Btn t={t} variant="secondary" onClick={() => { setRestoreTarget(null); setRestoreText(''); }}>Cancel</Btn>
+            <Btn t={t} variant="danger" onClick={runRestore} disabled={restoreText !== 'RESTORE' || restoring}>
+              {restoring ? 'Restoring…' : 'Restore Database'}
+            </Btn>
+          </>}>
+          <div className="flex flex-col gap-3 text-sm" style={{ color: t.textMuted }}>
+            <p>
+              This replaces <strong style={{ color: t.text }}>every</strong> product, customer, sale, purchase and other business record with what's in <strong style={{ color: t.text }}>"{restoreTarget.label}"</strong> ({(restoreTarget.created_at || '').replace('T', ' ').slice(0, 16)}). Anything added or changed since then will be lost.
+            </p>
+            <p>A safety backup of the current data is taken automatically first, so this can itself be undone if needed.</p>
+            <Field t={t} label='Type "RESTORE" to confirm'>
+              <TInput t={t} value={restoreText} onChange={e => setRestoreText(e.target.value)} placeholder="RESTORE" />
+            </Field>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }
@@ -3593,7 +3874,14 @@ function StockManagement({ t, products, setProducts, movements, addMovement, com
   // is never part of this form; it's computed above and only ever rendered as text.
   const savePriceEdit = async (form) => {
     try {
-      const { product } = await api.updateProduct(form.id, { ...form, rack: form.location, expectedUpdatedAt: form.updatedAt });
+      let product;
+      try {
+        ({ product } = await api.updateProduct(form.id, { ...form, rack: form.location, expectedUpdatedAt: form.updatedAt }));
+      } catch (err) {
+        ({ product } = await resolveConflictAndRetry(err, (current) =>
+          api.updateProduct(form.id, { ...form, rack: form.location, expectedUpdatedAt: current.updated_at })
+        ));
+      }
       const mapped = productFromApi(product);
       const old = products.find(p => p.id === form.id);
       setProducts(prev => prev.map(p => p.id === mapped.id ? mapped : p));
