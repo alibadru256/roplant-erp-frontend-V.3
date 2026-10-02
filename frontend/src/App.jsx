@@ -305,6 +305,12 @@ const api = {
     document.body.appendChild(a); a.click(); a.remove();
     URL.revokeObjectURL(url);
   },
+
+  // Production reset (owner-only) — see backend/src/routes/reset.routes.js. `status` reports
+  // whether the deployment has actually switched this on (ALLOW_PRODUCTION_RESET) — on Roplant's
+  // own live deployment this stays permanently off, so the UI below shows it as unavailable.
+  getResetStatus: () => apiRequest('/production-reset/status'),
+  runProductionReset: (confirmText) => apiRequest('/production-reset', { method: 'POST', body: { confirm: confirmText } }),
 };
 
 /* ============================== MOCK DATA ============================== */
@@ -336,52 +342,16 @@ function categoryIconDataUri(category) {
   return `data:image/svg+xml,${encodeURIComponent(svg)}`;
 }
 
-const initialProducts = [
-  { id: 1, sku: 'ENG-0001', partNumber: 'MF-3610245', barcode: '8901234500011', name: 'Cylinder Head Gasket', category: 'Engine Parts', brand: 'Massey Ferguson', compatibility: 'MF 240, MF 375', costPrice: 85000, sellPrice: 135000, stockQty: 14, reorderLevel: 5, maxStock: 20, primarySupplierId: 1, location: 'Warehouse A - Rack 1', image: 'https://loremflickr.com/300x300/engine,gasket?lock=1' },
-  { id: 2, sku: 'HYD-0002', partNumber: 'JD-RE12345', barcode: '8901234500028', name: 'Hydraulic Lift Pump', category: 'Hydraulics', brand: 'John Deere', compatibility: 'JD 5310, JD 5075E', costPrice: 420000, sellPrice: 610000, stockQty: 3, reorderLevel: 4, maxStock: 15, primarySupplierId: 2, location: 'Warehouse A - Rack 2', image: 'https://loremflickr.com/300x300/hydraulic,pump?lock=2' },
-  { id: 3, sku: 'FLT-0003', partNumber: 'NH-84475542', barcode: '8901234500035', name: 'Oil Filter Cartridge', category: 'Filters', brand: 'New Holland', compatibility: 'NH TT75, NH 3630', costPrice: 12000, sellPrice: 22000, stockQty: 62, reorderLevel: 20, maxStock: 50, primarySupplierId: 3, location: 'Shopfront Shelf', image: 'https://loremflickr.com/300x300/oil,filter?lock=3' },
-  { id: 4, sku: 'ELE-0004', partNumber: 'CIH-87654321', barcode: '8901234500042', name: 'Starter Motor 12V', category: 'Electrical', brand: 'Case IH', compatibility: 'Case IH 5130, 595', costPrice: 265000, sellPrice: 390000, stockQty: 6, reorderLevel: 3, maxStock: 20, primarySupplierId: 4, location: 'Warehouse B - Rack 1', image: 'https://loremflickr.com/300x300/starter,motor?lock=4' },
-  { id: 5, sku: 'TRN-0005', partNumber: 'MF-1867233M91', barcode: '8901234500059', name: 'Clutch Plate Assembly', category: 'Transmission', brand: 'Massey Ferguson', compatibility: 'MF 375, MF 390', costPrice: 195000, sellPrice: 285000, stockQty: 9, reorderLevel: 4, maxStock: 25, primarySupplierId: 1, location: 'Warehouse A - Rack 1', image: 'https://loremflickr.com/300x300/clutch,plate?lock=5' },
-  { id: 6, sku: 'BRK-0006', partNumber: 'GEN-BRK-2210', barcode: '8901234500066', name: 'Brake Shoe Set', category: 'Brakes', brand: 'Generic/Aftermarket', compatibility: 'Universal - 2WD tractors', costPrice: 48000, sellPrice: 75000, stockQty: 24, reorderLevel: 10, maxStock: 30, primarySupplierId: 4, location: 'Warehouse B - Rack 1', image: 'https://loremflickr.com/300x300/brake,shoe?lock=6' },
-  { id: 7, sku: 'TYR-0007', partNumber: 'JD-TYR-1834R', barcode: '8901234500073', name: 'Rear Tyre 18.4-34', category: 'Tyres & Wheels', brand: 'John Deere', compatibility: 'JD 5310, JD 5075E', costPrice: 780000, sellPrice: 1050000, stockQty: 0, reorderLevel: 3, maxStock: 10, primarySupplierId: 2, location: 'Warehouse A - Rack 2', image: 'https://loremflickr.com/300x300/tractor,tire?lock=7' },
-  { id: 8, sku: 'BLT-0008', partNumber: 'NH-BLT-5540', barcode: '8901234500080', name: 'Fan Belt Set', category: 'Belts & Chains', brand: 'New Holland', compatibility: 'NH TT75, NH 4630', costPrice: 22000, sellPrice: 38000, stockQty: 41, reorderLevel: 15, maxStock: 35, primarySupplierId: 3, location: 'Shopfront Shelf', image: 'https://loremflickr.com/300x300/fan,belt?lock=8' },
-  { id: 9, sku: 'ENG-0009', partNumber: 'CIH-INJ-9042', barcode: '8901234500097', name: 'Fuel Injector Nozzle', category: 'Engine Parts', brand: 'Case IH', compatibility: 'Case IH 595, 685', costPrice: 96000, sellPrice: 148000, stockQty: 17, reorderLevel: 6, maxStock: 25, primarySupplierId: 4, location: 'Warehouse A - Rack 1', image: 'https://loremflickr.com/300x300/fuel,injector?lock=9' },
-  { id: 10, sku: 'HYD-0010', partNumber: 'MF-HYD-7723', barcode: '8901234500103', name: 'Hydraulic Hose 3/4"', category: 'Hydraulics', brand: 'Massey Ferguson', compatibility: 'Universal', costPrice: 18000, sellPrice: 32000, stockQty: 55, reorderLevel: 20, maxStock: 60, primarySupplierId: 1, location: 'Warehouse B - Rack 1', image: 'https://loremflickr.com/300x300/hydraulic,hose?lock=10' },
-  { id: 11, sku: 'ELE-0011', partNumber: 'GEN-BAT-12100', barcode: '8901234500110', name: 'Battery 12V 100Ah', category: 'Electrical', brand: 'Generic/Aftermarket', compatibility: 'Universal', costPrice: 310000, sellPrice: 455000, stockQty: 8, reorderLevel: 4, maxStock: 20, primarySupplierId: 4, location: 'Shopfront Shelf', image: 'https://loremflickr.com/300x300/car,battery?lock=11' },
-  { id: 12, sku: 'FLT-0012', partNumber: 'JD-FLT-6620', barcode: '8901234500127', name: 'Air Filter Element', category: 'Filters', brand: 'John Deere', compatibility: 'JD 5310, JD 5075E', costPrice: 16000, sellPrice: 27000, stockQty: 4, reorderLevel: 15, maxStock: 40, primarySupplierId: 2, location: 'Shopfront Shelf', image: 'https://loremflickr.com/300x300/air,filter?lock=12' },
-];
-
-const initialCustomers = [
-  { id: 1, name: 'Kigezi Agro Traders', phone: '+256 772 456 123', email: 'kigezi.agro@example.com', creditLimit: 2000000, balance: 450000 },
-  { id: 2, name: 'Mbale Farm Equipment Ltd', phone: '+256 701 998 221', email: 'mbale.fe@example.com', creditLimit: 5000000, balance: 5400000 },
-  { id: 3, name: 'Semanda Wilson (Walk-in)', phone: '+256 782 334 210', email: '', creditLimit: 0, balance: 0 },
-  { id: 4, name: 'Northern Tractor Hub', phone: '+256 758 112 984', email: 'info@ntractorhub.example.com', creditLimit: 3000000, balance: 1200000 },
-  { id: 5, name: 'Busoga Mechanization Co-op', phone: '+256 793 665 442', email: 'busoga.coop@example.com', creditLimit: 1500000, balance: 0 },
-];
-
-const initialSuppliers = [
-  { id: 1, name: 'Massey Ferguson Parts (U) Ltd', phone: '+256 414 220 019', email: 'sales@mfparts.example.com', balance: 2350000 },
-  { id: 2, name: 'John Deere East Africa', phone: '+256 414 556 210', email: 'orders@jdeafrica.example.com', balance: 0 },
-  { id: 3, name: 'New Holland Distributors', phone: '+256 312 998 004', email: 'supply@nhd.example.com', balance: 890000 },
-  { id: 4, name: 'Generic Auto Spares Kampala', phone: '+256 700 774 552', email: 'genauto@example.com', balance: 415000 },
-];
-
-const initialUsers = [
-  { id: 1, name: 'Ronald Mukasa', email: 'ronald@roplantservices.com', password: '••••••••', role: 'Admin', isOwner: true, status: 'Active', lastLogin: '2026-09-05 08:12' },
-  { id: 2, name: 'Grace Nabirye', email: 'grace@roplantservices.com', password: '••••••••', role: 'Manager', isOwner: false, status: 'Active', lastLogin: '2026-09-05 07:40' },
-  { id: 3, name: 'David Mugisha', email: 'david@roplantservices.com', password: '••••••••', role: 'Sales', isOwner: false, status: 'Active', lastLogin: '2026-09-04 17:02' },
-  { id: 4, name: 'Patience Auma', email: 'patience@roplantservices.com', password: '••••••••', role: 'Inventory', isOwner: false, status: 'Active', lastLogin: '2026-09-04 16:20' },
-  { id: 5, name: 'Samuel Kato', email: 'samuel@roplantservices.com', password: '••••••••', role: 'Accountant', isOwner: false, status: 'Inactive', lastLogin: '2026-08-29 09:15' },
-];
-
-const REVENUE_TREND = [
-  { month: 'Apr', revenue: 8200000, profit: 2450000 },
-  { month: 'May', revenue: 9100000, profit: 2680000 },
-  { month: 'Jun', revenue: 7800000, profit: 2210000 },
-  { month: 'Jul', revenue: 10450000, profit: 3120000 },
-  { month: 'Aug', revenue: 11200000, profit: 3390000 },
-  { month: 'Sep', revenue: 4600000, profit: 1380000 },
-];
+// Real state for every one of these is loaded from the backend below (see the refetch*
+// functions) the moment a user is authenticated. They start empty — not filled with sample
+// business records — so that if a fetch ever fails (backend down, network issue), the app
+// shows an empty state plus the error toast rather than silently displaying fake data that
+// looks real. A production ERP must never let a connection failure be mistaken for "no data
+// entered yet" or, worse, for genuine business records.
+const initialProducts = [];
+const initialCustomers = [];
+const initialSuppliers = [];
+const initialUsers = [];
 
 const DEFAULT_PERMISSIONS = {
   Admin: ['dashboard', 'inventory', 'icc', 'stockmgmt', 'pos', 'purchasing', 'customers', 'suppliers', 'returns', 'reports', 'documents', 'whatsapp', 'users', 'settings'],
@@ -945,23 +915,24 @@ export default function App() {
   const [products, setProducts] = useState(initialProducts);
   const [customers, setCustomers] = useState(initialCustomers);
   const [suppliers, setSuppliers] = useState(initialSuppliers);
+  // Real category list from the categories table — the CATEGORIES constant further down is only
+  // a starter suggestion list for the product-add dropdown, never the source of truth for what
+  // categories actually exist. Any category the owner has actually used (including ones typed
+  // freehand on the product form) must show up in the dashboard chart, filters, and valuation
+  // export, so those all read from this fetched list instead.
+  const [categories, setCategories] = useState([]);
   const [users, setUsers] = useState(initialUsers);
   const [movements, setMovements] = useState(() =>
     initialProducts.map(p => ({ id: nextId(), productId: p.id, type: 'Opening Stock', qtyChange: p.stockQty, balanceAfter: p.stockQty, reference: 'OPEN-0001', user: 'System', date: '2026-01-01 00:00' }))
   );
   const [sales, setSales] = useState([]);
-  const [purchaseOrders, setPurchaseOrders] = useState([
-    { id: nextId(), poNo: 'PO-0001', supplierId: 1, supplierName: 'Massey Ferguson Parts (U) Ltd', date: '2026-08-20', items: [{ productId: 1, name: 'Cylinder Head Gasket', qty: 10, unitCost: 85000 }], total: 850000, status: 'Received', grnNo: 'GRN-0001' },
-    { id: nextId(), poNo: 'PO-0002', supplierId: 3, supplierName: 'New Holland Distributors', date: '2026-09-01', items: [{ productId: 3, name: 'Oil Filter Cartridge', qty: 40, unitCost: 12000 }], total: 480000, status: 'Pending', grnNo: null },
-    { id: nextId(), poNo: 'PO-0003', supplierId: 2, supplierName: 'John Deere East Africa', date: '2026-09-03', items: [{ productId: 7, name: 'Rear Tyre 18.4-34', qty: 5, unitCost: 780000 }], total: 3900000, status: 'Pending', grnNo: null },
-  ]);
+  // Was previously seeded with 3 fake purchase orders — same reasoning as the empty
+  // initial*/auditLog arrays above: real data replaces this immediately on load, and this way
+  // a failed fetch shows nothing rather than fabricated purchase orders.
+  const [purchaseOrders, setPurchaseOrders] = useState([]);
   const [returns, setReturns] = useState([]);
   const [quotations, setQuotations] = useState([]);
-  const [auditLog, setAuditLog] = useState([
-    { id: nextId(), date: '2026-09-05 08:14', user: 'Ronald Opio', role: 'Admin', action: 'Updated sell price', module: 'Products & Inventory', before: 'UGX 125,000', after: 'UGX 135,000' },
-    { id: nextId(), date: '2026-09-04 16:22', user: 'Patience Auma', role: 'Inventory', action: 'Received PO-0001', module: 'Purchasing', before: 'Stock: 4', after: 'Stock: 14' },
-    { id: nextId(), date: '2026-09-04 11:05', user: 'David Mugisha', role: 'Sales', action: 'Completed sale RPL-INV-0004', module: 'POS', before: '-', after: 'UGX 610,000' },
-  ]);
+  const [auditLog, setAuditLog] = useState([]);
 
   useEffect(() => {
     if (!getToken()) { setSessionChecked(true); return; }
@@ -1000,6 +971,9 @@ export default function App() {
 
   const refetchSuppliers = () => api.listSuppliers({ pageSize: 200 }).then((data) => setSuppliers(data.suppliers.map(supplierFromApi))).catch((err) => notify(err.message, 'error'));
   useEffect(() => { if (currentUser) refetchSuppliers(); }, [currentUser]);
+
+  const refetchCategories = () => api.listCategories().then((data) => setCategories((data.categories || []).map((c) => c.name))).catch((err) => notify(err.message, 'error'));
+  useEffect(() => { if (currentUser) refetchCategories(); }, [currentUser]);
 
   const refetchPurchaseOrders = () => api.listPurchaseOrders({ pageSize: 200 }).then((data) => setPurchaseOrders(data.purchaseOrders.map(purchaseOrderFromApi))).catch((err) => notify(err.message, 'error'));
   useEffect(() => { if (currentUser) refetchPurchaseOrders(); }, [currentUser]);
@@ -1070,7 +1044,7 @@ export default function App() {
     setActiveModule('dashboard');
   };
 
-  const ctx = { t, theme, role, currentUser, companyInfo, notify, setConfirm, logAudit, addMovement, setActiveModule, permissions, setPermissions, users, setUsers, logout };
+  const ctx = { t, theme, role, currentUser, companyInfo, notify, setConfirm, logAudit, addMovement, setActiveModule, permissions, setPermissions, users, setUsers, logout, categories, refetchCategories };
 
   return (
     <div style={{ fontFamily: "'Inter',sans-serif", background: t.bg, color: t.text, minHeight: '600px' }} className="w-full flex rounded-xl overflow-hidden">
@@ -1173,7 +1147,7 @@ export default function App() {
 }
 
 /* ============================== DASHBOARD ============================== */
-function Dashboard({ t, role, companyInfo, products, sales, customers, suppliers, setActiveModule }) {
+function Dashboard({ t, role, companyInfo, products, sales, customers, suppliers, setActiveModule, categories }) {
   const FINANCE_ROLES = ['Admin', 'Manager', 'Accountant'];
   const canSeeFinancials = FINANCE_ROLES.includes(role);
   const canSeeStockValue = ['Admin', 'Manager', 'Accountant', 'Inventory'].includes(role);
@@ -1219,7 +1193,11 @@ function Dashboard({ t, role, companyInfo, products, sales, customers, suppliers
       return { label: key, revenue: monthSales.reduce((s, x) => s + x.total, 0), profit: monthSales.reduce((s, x) => s + (x.total - cogsOf(x)), 0) };
     });
   })();
-  const categoryData = CATEGORIES.map(c => ({ name: c, value: products.filter(p => p.category === c).reduce((s, p) => s + p.stockQty * p.costPrice, 0) })).filter(d => d.value > 0);
+  // Real categories from the categories table, unioned with whatever's actually on a product
+  // right now (covers the moment right after login before the fetch resolves) — never the
+  // static CATEGORIES starter list, which would silently hide any category the owner added.
+  const realCategories = [...new Set([...(categories || []), ...products.map(p => p.category).filter(Boolean)])].sort();
+  const categoryData = realCategories.map(c => ({ name: c, value: products.filter(p => p.category === c).reduce((s, p) => s + p.stockQty * p.costPrice, 0) })).filter(d => d.value > 0);
   const pieColors = [t.accent, t.steel, t.success, t.warning, t.danger, '#8B7FD9', '#4FBFB0', '#C97FB0'];
 
   return (
@@ -1276,7 +1254,7 @@ function Dashboard({ t, role, companyInfo, products, sales, customers, suppliers
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
           <StatCard t={t} label="Receivables" value={money(receivables, companyInfo.currency)} sub={`${customers.filter(c => c.balance > 0).length} customers owing`} icon={ArrowUpRight} tone="warning" />
           <StatCard t={t} label="Payables" value={money(payables, companyInfo.currency)} sub={`${suppliers.filter(s => s.balance > 0).length} suppliers owed`} icon={ArrowDownRight} tone="danger" />
-          <StatCard t={t} label="Total Products" value={products.length} sub={`${CATEGORIES.length} categories`} icon={ClipboardList} tone="steel" />
+          <StatCard t={t} label="Total Products" value={products.length} sub={`${realCategories.length} categories`} icon={ClipboardList} tone="steel" />
           <StatCard t={t} label="Total Customers" value={customers.length} sub={`${sales.length} sales on record`} icon={Users} tone="accent" />
         </div>
       )}
@@ -1362,9 +1340,10 @@ function Dashboard({ t, role, companyInfo, products, sales, customers, suppliers
 }
 
 /* ============================== INVENTORY ============================== */
-function Inventory({ t, products, setProducts, productsLoading, refetchProducts, movements, companyInfo, notify, logAudit, addMovement, role, currentUser, setConfirm }) {
+function Inventory({ t, products, setProducts, productsLoading, refetchProducts, movements, companyInfo, notify, logAudit, addMovement, role, currentUser, setConfirm, categories }) {
   const [search, setSearch] = useState('');
   const [category, setCategory] = useState('All');
+  const realCategories = [...new Set([...(categories || []), ...products.map(p => p.category).filter(Boolean)])].sort();
   const [modal, setModal] = useState(null); // 'add' | product for edit
   const [historyProduct, setHistoryProduct] = useState(null);
   const [qrProduct, setQrProduct] = useState(null);
@@ -1486,7 +1465,7 @@ function Inventory({ t, products, setProducts, productsLoading, refetchProducts,
           <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search by name, SKU or part number…" className="bg-transparent outline-none text-sm w-full" style={{ color: t.text }} />
         </div>
         <TSelect t={t} value={category} onChange={e => setCategory(e.target.value)} style={{ width: 200 }}>
-          <option>All</option>{CATEGORIES.map(c => <option key={c}>{c}</option>)}
+          <option>All</option>{realCategories.map(c => <option key={c}>{c}</option>)}
         </TSelect>
         {isOwner && (
           <label className="flex items-center gap-2 px-3 py-2 rounded-md text-sm" style={{ background: t.surfaceAlt, border: `1px solid ${t.border}`, color: t.textMuted }}>
@@ -1680,9 +1659,10 @@ function ProductModal({ t, initial, onClose, onSave, isNew, products }) {
 }
 
 /* ============================== POS ============================== */
-function POS({ t, products, setProducts, refetchProducts, refetchMovements, customers, setCustomers, refetchCustomers, sales, setSales, companyInfo, notify, logAudit, addMovement, role }) {
+function POS({ t, products, setProducts, refetchProducts, refetchMovements, customers, setCustomers, refetchCustomers, sales, setSales, companyInfo, notify, logAudit, addMovement, role, categories }) {
   const [search, setSearch] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('All');
+  const realCategories = [...new Set([...(categories || []), ...products.map(p => p.category).filter(Boolean)])].sort();
   const [cart, setCart] = useState([]);
   const [customerId, setCustomerId] = useState(customers[0]?.id);
   const [discount, setDiscount] = useState(0);
@@ -1814,7 +1794,7 @@ function POS({ t, products, setProducts, refetchProducts, refetchMovements, cust
               <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search or scan barcode…" className="bg-transparent outline-none text-sm w-full" style={{ color: t.text }} />
             </div>
             <TSelect t={t} value={categoryFilter} onChange={e => setCategoryFilter(e.target.value)} style={{ width: 170 }}>
-              <option>All</option>{CATEGORIES.map(c => <option key={c}>{c}</option>)}
+              <option>All</option>{realCategories.map(c => <option key={c}>{c}</option>)}
             </TSelect>
             <Btn t={t} variant="secondary" icon={Camera} onClick={() => setScanOpen(true)}>Scan</Btn>
           </div>
@@ -3338,6 +3318,37 @@ function SettingsPage({ t, companyInfo, setCompanyInfo, notify, role, logout, se
     }
   };
 
+  // ---- Production reset (owner-only): wipes every business record back to empty so this
+  // installation can be handed to a brand-new company. Only does anything at all when the
+  // server's own ALLOW_PRODUCTION_RESET environment variable is switched on — see
+  // reset.routes.js. On Roplant's own deployment that variable is never set, so this section
+  // below always shows the feature as unavailable rather than letting anyone attempt it.
+  const [resetStatus, setResetStatus] = useState(null);
+  const [resetModalOpen, setResetModalOpen] = useState(false);
+  const [resetConfirmText, setResetConfirmText] = useState('');
+  const [resetting, setResetting] = useState(false);
+
+  useEffect(() => {
+    if (!isOwner) return;
+    api.getResetStatus().then(setResetStatus).catch(() => {});
+  }, [isOwner]);
+
+  const runProductionReset = async () => {
+    if (!resetStatus || resetConfirmText !== resetStatus.confirmPhrase) return;
+    setResetting(true);
+    try {
+      await api.runProductionReset(resetConfirmText);
+      notify('Production reset complete. A safety backup of the previous data was created automatically.');
+      setResetModalOpen(false);
+      setResetConfirmText('');
+      await refetchBackups();
+    } catch (err) {
+      notify(err.message, 'error');
+    } finally {
+      setResetting(false);
+    }
+  };
+
   return (
     <div className="flex flex-col gap-4 max-w-2xl">
       <div><h1 className="text-xl font-semibold" style={{ fontFamily: "'Space Grotesk',sans-serif" }}>Settings</h1><p className="text-sm" style={{ color: t.textMuted }}>Company information, tax, currency and document numbering.</p></div>
@@ -3459,6 +3470,47 @@ function SettingsPage({ t, companyInfo, setCompanyInfo, notify, role, logout, se
         </Card>
       )}
 
+      {isOwner && resetStatus && (
+        <Card t={t} className="p-5 flex flex-col gap-3" style={{ borderColor: resetStatus.enabled ? t.danger : t.border }}>
+          <div>
+            <h3 className="font-semibold text-sm" style={{ fontFamily: "'Space Grotesk',sans-serif" }}>Production Reset</h3>
+            <p className="text-xs mt-1" style={{ color: t.textFaint }}>
+              Permanently erases every product, customer, supplier, sale, purchase, return, quotation, stocktake and journal entry — for handing this installation to a completely new business. Your login, company settings and the backup archive are never touched.
+            </p>
+          </div>
+          {resetStatus.enabled ? (
+            <div className="flex items-center justify-between p-3 rounded-md flex-wrap gap-2" style={{ background: t.dangerSoft || t.surfaceAlt }}>
+              <div className="text-xs" style={{ color: t.danger }}>This is switched on for this deployment and cannot be undone by anything except the safety backup taken right before it runs.</div>
+              <Btn t={t} variant="danger" onClick={() => { setResetModalOpen(true); setResetConfirmText(''); }}>Reset to Empty</Btn>
+            </div>
+          ) : (
+            <div className="text-xs p-3 rounded-md" style={{ background: t.surfaceAlt, color: t.textFaint }}>
+              Not available on this deployment — an administrator would need to switch it on in the server's own environment configuration first. This is intentional: it keeps a real, in-use system like this one from ever being reset by mistake.
+            </div>
+          )}
+        </Card>
+      )}
+
+      {resetModalOpen && resetStatus && (
+        <Modal t={t} title="Production reset" onClose={() => { setResetModalOpen(false); setResetConfirmText(''); }}
+          footer={<>
+            <Btn t={t} variant="secondary" onClick={() => { setResetModalOpen(false); setResetConfirmText(''); }}>Cancel</Btn>
+            <Btn t={t} variant="danger" onClick={runProductionReset} disabled={resetConfirmText !== resetStatus.confirmPhrase || resetting}>
+              {resetting ? 'Resetting…' : 'Erase Everything'}
+            </Btn>
+          </>}>
+          <div className="flex flex-col gap-3 text-sm" style={{ color: t.textMuted }}>
+            <p>
+              This permanently erases <strong style={{ color: t.text }}>every</strong> product, customer, supplier, sale, purchase, return, quotation, stocktake and journal entry. Users, company settings and the backup archive are kept.
+            </p>
+            <p>A safety backup of the current data is taken automatically first, so this can itself be undone if needed.</p>
+            <Field t={t} label={`Type "${resetStatus.confirmPhrase}" to confirm`}>
+              <TInput t={t} value={resetConfirmText} onChange={e => setResetConfirmText(e.target.value)} placeholder={resetStatus.confirmPhrase} />
+            </Field>
+          </div>
+        </Modal>
+      )}
+
       {restoreTarget && (
         <Modal t={t} title="Restore from backup" onClose={() => { setRestoreTarget(null); setRestoreText(''); }}
           footer={<>
@@ -3483,10 +3535,11 @@ function SettingsPage({ t, companyInfo, setCompanyInfo, notify, role, logout, se
 }
 
 /* ============================== INVENTORY CONTROL CENTER ============================== */
-function InventoryControlCenter({ t, products, refetchProducts, movements, refetchMovements, addMovement, sales, purchaseOrders, suppliers, customers, returns, companyInfo, notify, logAudit, role, setActiveModule }) {
+function InventoryControlCenter({ t, products, refetchProducts, movements, refetchMovements, addMovement, sales, purchaseOrders, suppliers, customers, returns, companyInfo, notify, logAudit, role, setActiveModule, categories }) {
   const [tab, setTab] = useState('all');
   const [search, setSearch] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('All');
+  const realCategories = [...new Set([...(categories || []), ...products.map(p => p.category).filter(Boolean)])].sort();
   const [statusFilter, setStatusFilter] = useState('All');
   const [selected, setSelected] = useState(null);
   const [adjForm, setAdjForm] = useState({ productId: products[0]?.id, direction: 'Increase', qty: 1, reason: '' });
@@ -3528,7 +3581,7 @@ function InventoryControlCenter({ t, products, refetchProducts, movements, refet
   };
 
   const exportAllStock = () => downloadCSV('all-stock.csv', [['SKU', 'Name', 'Category', 'Qty', 'Min', 'Max', 'Cost', 'Sell', 'Value', 'Status'], ...filteredProducts.map(p => [p.sku, p.name, p.category, p.stockQty, p.reorderLevel, p.maxStock, p.costPrice, p.sellPrice, p.stockQty * p.costPrice, productStatus(p)])]);
-  const exportValuation = () => downloadCSV('stock-valuation.csv', [['Category', 'Units', 'Value'], ...CATEGORIES.map(c => { const items = products.filter(p => p.category === c); return [c, items.reduce((s, p) => s + p.stockQty, 0), items.reduce((s, p) => s + p.stockQty * p.costPrice, 0)]; })]);
+  const exportValuation = () => downloadCSV('stock-valuation.csv', [['Category', 'Units', 'Value'], ...realCategories.map(c => { const items = products.filter(p => p.category === c); return [c, items.reduce((s, p) => s + p.stockQty, 0), items.reduce((s, p) => s + p.stockQty * p.costPrice, 0)]; })]);
 
   const stockInRows = movements.filter(m => ['Purchase', 'Return-In'].includes(m.type)).map(m => {
     const product = products.find(p => p.id === m.productId);
@@ -3594,7 +3647,7 @@ function InventoryControlCenter({ t, products, refetchProducts, movements, refet
               <Search size={15} style={{ color: t.textFaint }} />
               <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search name, SKU, part number…" className="bg-transparent outline-none text-sm w-full" style={{ color: t.text }} />
             </div>
-            <TSelect t={t} value={categoryFilter} onChange={e => setCategoryFilter(e.target.value)} style={{ width: 180 }}><option>All</option>{CATEGORIES.map(c => <option key={c}>{c}</option>)}</TSelect>
+            <TSelect t={t} value={categoryFilter} onChange={e => setCategoryFilter(e.target.value)} style={{ width: 180 }}><option>All</option>{realCategories.map(c => <option key={c}>{c}</option>)}</TSelect>
             <TSelect t={t} value={statusFilter} onChange={e => setStatusFilter(e.target.value)} style={{ width: 160 }}><option>All</option><option>Normal</option><option>Low Stock</option><option>Out of Stock</option><option>Overstock</option></TSelect>
             <Btn t={t} variant="secondary" icon={Download} onClick={exportAllStock}>Export CSV</Btn>
           </div>
@@ -3691,7 +3744,7 @@ function InventoryControlCenter({ t, products, refetchProducts, movements, refet
           <table className="w-full text-sm mb-4">
             <thead><tr style={{ borderBottom: `1px solid ${t.border}` }}>{['Category', 'Units', 'Value', '% of Total'].map(h => <th key={h} className="text-left px-3 py-2 font-medium" style={{ color: t.textFaint, fontSize: 12 }}>{h}</th>)}</tr></thead>
             <tbody>
-              {CATEGORIES.map(c => {
+              {realCategories.map(c => {
                 const items = products.filter(p => p.category === c);
                 const units = items.reduce((s, p) => s + p.stockQty, 0);
                 const value = items.reduce((s, p) => s + p.stockQty * p.costPrice, 0);
