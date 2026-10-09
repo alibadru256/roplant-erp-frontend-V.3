@@ -165,6 +165,7 @@ function movementFromApi(row) {
     productName: row.product_name, type: row.type, qtyChange: row.qty_change,
     balanceBefore: row.balance_before, balanceAfter: row.balance_after,
     reference: row.reference || '', reason: row.reason || '', userName: row.user_name,
+    location: row.location || '',
   };
 }
 
@@ -213,6 +214,10 @@ function productFromApi(row) {
     reorderLevel: row.reorder_level, maxStock: row.max_stock, primarySupplierId: row.primary_supplier_id,
     rack: row.rack || '', shelfBin: row.shelf_bin || '', location: row.rack || '', image: row.image || '', active: row.active,
     updatedAt: row.updated_at, createdAt: row.created_at,
+    // Per-location stock. stockQty above is the TOTAL on hand (warehouse + shop + unallocated);
+    // the POS sells shopQty only; inTransitQty is goods dispatched but not yet received.
+    warehouseQty: row.warehouse_qty ?? 0, shopQty: row.shop_qty ?? 0,
+    unallocatedQty: row.unallocated_qty ?? 0, inTransitQty: row.in_transit_qty ?? 0,
   };
 }
 
@@ -269,6 +274,17 @@ const api = {
   correctSaleStatus: (id, status) => apiRequest(`/sales/${id}/status`, { method: 'PUT', body: { status } }),
 
   listCategories: () => apiRequest('/categories'),
+
+  // Warehouse / shop stock locations and transfers (backend: transfers.routes.js, inventory.routes.js)
+  inventoryOverview: () => apiRequest('/inventory/overview'),
+  allocateOpening: (allocations) => apiRequest('/inventory/allocate-opening', { method: 'POST', body: { allocations } }),
+  listTransfers: (params = {}) => apiRequest(`/transfers?${new URLSearchParams(params)}`),
+  getTransfer: (id) => apiRequest(`/transfers/${id}`),
+  createTransfer: (body) => apiRequest('/transfers', { method: 'POST', body }),
+  dispatchTransfer: (id) => apiRequest(`/transfers/${id}/dispatch`, { method: 'POST' }),
+  receiveTransfer: (id, lines) => apiRequest(`/transfers/${id}/receive`, { method: 'POST', body: { lines } }),
+  resolveTransfer: (id, note) => apiRequest(`/transfers/${id}/resolve`, { method: 'POST', body: { note } }),
+  cancelTransfer: (id) => apiRequest(`/transfers/${id}/cancel`, { method: 'POST' }),
 
   getSettings: () => apiRequest('/settings'),
   updateSettings: (settings) => apiRequest('/settings', { method: 'PUT', body: settings }),
@@ -354,16 +370,17 @@ const initialSuppliers = [];
 const initialUsers = [];
 
 const DEFAULT_PERMISSIONS = {
-  Admin: ['dashboard', 'inventory', 'icc', 'stockmgmt', 'pos', 'purchasing', 'customers', 'suppliers', 'returns', 'reports', 'documents', 'whatsapp', 'users', 'settings'],
-  Manager: ['dashboard', 'inventory', 'icc', 'stockmgmt', 'pos', 'purchasing', 'customers', 'suppliers', 'returns', 'reports', 'documents', 'whatsapp', 'settings'],
-  Sales: ['dashboard', 'stockmgmt', 'pos', 'customers', 'returns', 'documents', 'whatsapp'],
-  Inventory: ['dashboard', 'inventory', 'icc', 'stockmgmt', 'purchasing', 'returns'],
-  Accountant: ['dashboard', 'icc', 'stockmgmt', 'reports', 'customers', 'suppliers', 'documents', 'whatsapp'],
+  Admin: ['dashboard', 'inventory', 'locations', 'icc', 'stockmgmt', 'pos', 'purchasing', 'customers', 'suppliers', 'returns', 'reports', 'documents', 'whatsapp', 'users', 'settings'],
+  Manager: ['dashboard', 'inventory', 'locations', 'icc', 'stockmgmt', 'pos', 'purchasing', 'customers', 'suppliers', 'returns', 'reports', 'documents', 'whatsapp', 'settings'],
+  Sales: ['dashboard', 'locations', 'stockmgmt', 'pos', 'customers', 'returns', 'documents', 'whatsapp'],
+  Inventory: ['dashboard', 'inventory', 'locations', 'icc', 'stockmgmt', 'purchasing', 'returns'],
+  Accountant: ['dashboard', 'locations', 'icc', 'stockmgmt', 'reports', 'customers', 'suppliers', 'documents', 'whatsapp'],
 };
 
 const NAV_ITEMS = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { id: 'inventory', label: 'Products & Inventory', icon: Package },
+  { id: 'locations', label: 'Warehouse & Shop', icon: Boxes },
   { id: 'icc', label: 'Inventory Control Center', icon: Warehouse },
   { id: 'stockmgmt', label: 'Stock Management', icon: ClipboardList },
   { id: 'pos', label: 'Sales / POS', icon: ShoppingCart },
@@ -901,6 +918,11 @@ export default function App() {
   const [permissions, setPermissions] = useState(DEFAULT_PERMISSIONS);
   const [activeModule, setActiveModule] = useState('dashboard');
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [desktopNavHidden, setDesktopNavHidden] = useState(false); // desktop: sidebar can be hidden/shown like on the phone
+  const toggleNav = () => {
+    if (typeof window !== 'undefined' && window.innerWidth >= 768) setDesktopNavHidden(v => !v);
+    else setMobileNavOpen(v => !v);
+  };
   const [toast, setToast] = useState(null);
   const [confirm, setConfirm] = useState(null);
 
@@ -1062,7 +1084,7 @@ export default function App() {
         }`}</style>
 
       {/* SIDEBAR */}
-      <aside className={`flex-col shrink-0 ${mobileNavOpen ? 'flex absolute z-40 h-full' : 'hidden'} md:flex md:static`}
+      <aside className={`flex-col shrink-0 ${mobileNavOpen ? 'flex absolute z-40 h-full' : 'hidden'} ${desktopNavHidden ? 'md:hidden' : 'md:flex md:static'}`}
         style={{ width: '236px', background: t.surface, borderRight: `1px solid ${t.border}` }}>
         <div className="px-5 py-5 flex items-center gap-2.5" style={{ borderBottom: `1px solid ${t.border}` }}>
           {companyInfo.logo
@@ -1098,7 +1120,7 @@ export default function App() {
       <div className="flex-1 flex flex-col min-w-0">
         {/* TOPBAR */}
         <header className="flex items-center gap-3 px-4 md:px-6 py-3 shrink-0" style={{ borderBottom: `1px solid ${t.border}`, background: t.surface }}>
-          <button className="md:hidden" onClick={() => setMobileNavOpen(v => !v)}><Menu size={20} /></button>
+          <button title="Show / hide menu" onClick={toggleNav}><Menu size={20} /></button>
           <div className="hidden md:flex items-center gap-2 px-3 py-2 rounded-md flex-1 max-w-sm" style={{ background: t.surfaceAlt, border: `1px solid ${t.border}` }}>
             <Search size={15} style={{ color: t.textFaint }} />
             <input placeholder="Search parts, customers, invoices…" className="bg-transparent outline-none text-sm w-full" style={{ color: t.text }} />
@@ -1125,6 +1147,7 @@ export default function App() {
         <main className="flex-1 overflow-y-auto p-4 md:p-6" style={{ background: t.bg }}>
           {activeModule === 'dashboard' && <Dashboard {...ctx} products={products} sales={sales} customers={customers} suppliers={suppliers} />}
           {activeModule === 'inventory' && <Inventory {...ctx} products={products} setProducts={setProducts} productsLoading={productsLoading} refetchProducts={refetchProducts} movements={movements} />}
+          {activeModule === 'locations' && <WarehouseShop {...ctx} products={products} refetchProducts={refetchProducts} refetchMovements={refetchMovements} />}
           {activeModule === 'icc' && <InventoryControlCenter {...ctx} products={products} refetchProducts={refetchProducts} movements={movements} refetchMovements={refetchMovements} sales={sales} purchaseOrders={purchaseOrders} suppliers={suppliers} customers={customers} returns={returns} />}
           {activeModule === 'stockmgmt' && <StockManagement {...ctx} products={products} setProducts={setProducts} movements={movements} />}
           {activeModule === 'pos' && <POS {...ctx} products={products} setProducts={setProducts} refetchProducts={refetchProducts} refetchMovements={refetchMovements} customers={customers} setCustomers={setCustomers} refetchCustomers={refetchCustomers} sales={sales} setSales={setSales} />}
@@ -1648,6 +1671,14 @@ function ProductModal({ t, initial, onClose, onSave, isNew, products }) {
         <Field t={t} label="Cost Price *"><TInput t={t} type="number" value={form.costPrice} onChange={e => set('costPrice', +e.target.value)} /></Field>
         <Field t={t} label="Sell Price *"><TInput t={t} type="number" value={form.sellPrice} onChange={e => set('sellPrice', +e.target.value)} /></Field>
         <Field t={t} label={isNew ? 'Opening Stock Qty *' : 'Current Stock (view stock movements to adjust)'}><TInput t={t} type="number" disabled={!isNew} value={form.stockQty} onChange={e => set('stockQty', +e.target.value)} /></Field>
+        {isNew && (
+          <Field t={t} label="Opening Stock Location">
+            <TSelect t={t} value={form.openingLocation || 'warehouse'} onChange={e => set('openingLocation', e.target.value)}>
+              <option value="warehouse">Warehouse (not sellable until transferred to the shop)</option>
+              <option value="shop">Shop (sellable at the POS now)</option>
+            </TSelect>
+          </Field>
+        )}
         <Field t={t} label="Reorder Level (Min Stock) *"><TInput t={t} type="number" value={form.reorderLevel} onChange={e => set('reorderLevel', +e.target.value)} /></Field>
         <Field t={t} label="Maximum Stock *"><TInput t={t} type="number" value={form.maxStock} onChange={e => set('maxStock', +e.target.value)} /></Field>
       </div>
@@ -1666,6 +1697,7 @@ function POS({ t, products, setProducts, refetchProducts, refetchMovements, cust
   const [cart, setCart] = useState([]);
   const [customerId, setCustomerId] = useState(customers[0]?.id);
   const [discount, setDiscount] = useState(0);
+  const [discountMode, setDiscountMode] = useState('percent'); // 'percent' (%) or 'amount' (fixed UGX)
   const [payment, setPayment] = useState('Cash');
   const [receipt, setReceipt] = useState(null);
   const [scanOpen, setScanOpen] = useState(false);
@@ -1724,15 +1756,22 @@ function POS({ t, products, setProducts, refetchProducts, refetchMovements, cust
     (categoryFilter === 'All' || p.category === categoryFilter) &&
     (p.name.toLowerCase().includes(search.toLowerCase()) || p.sku.toLowerCase().includes(search.toLowerCase()))
   );
+  // The POS sells SHOP stock only (p.shopQty). Warehouse stock and goods in transit are never
+  // sellable here — the server enforces this too, so this is just the friendly front door.
+  const outOfShopMessage = (p) => p.warehouseQty > 0
+    ? `Out of stock at shop. Available in warehouse: ${p.warehouseQty} units. Transfer required.`
+    : p.unallocatedQty > 0
+      ? `${p.unallocatedQty} units of existing stock haven't been placed at the shop yet — a manager needs to allocate it (Warehouse & Shop).`
+      : `${p.name} is out of stock at the shop.`;
   const addToCart = (p) => {
-    if (p.stockQty <= 0) { notify(`${p.name} is out of stock.`, 'error'); return; }
+    if (p.shopQty <= 0) { notify(`${p.name}: ${outOfShopMessage(p)}`, 'error'); return; }
     setCart(prev => {
       const existing = prev.find(i => i.productId === p.id);
       if (existing) {
-        if (existing.qty >= p.stockQty) { notify('Not enough stock available.', 'error'); return prev; }
+        if (existing.qty >= p.shopQty) { notify('Not enough stock available at the shop.', 'error'); return prev; }
         return prev.map(i => i.productId === p.id ? { ...i, qty: i.qty + 1 } : i);
       }
-      return [...prev, { productId: p.id, sku: p.sku, name: p.name, price: p.sellPrice, cost: p.costPrice, qty: 1, maxQty: p.stockQty }];
+      return [...prev, { productId: p.id, sku: p.sku, name: p.name, price: p.sellPrice, cost: p.costPrice, qty: 1, maxQty: p.shopQty }];
     });
   };
   const findByCode = (code) => products.find(p => p.barcode === code.trim() || p.sku.toLowerCase() === code.trim().toLowerCase());
@@ -1740,7 +1779,9 @@ function POS({ t, products, setProducts, refetchProducts, refetchMovements, cust
   const removeItem = (id) => setCart(prev => prev.filter(i => i.productId !== id));
 
   const subtotal = cart.reduce((s, i) => s + i.price * i.qty, 0);
-  const discountAmt = subtotal * (discount / 100);
+  const discountAmt = discountMode === 'amount'
+    ? Math.min(Math.max(Number(discount) || 0, 0), subtotal)
+    : subtotal * (discount / 100);
   const taxable = subtotal - discountAmt;
   const tax = taxable * (companyInfo.taxRate / 100);
   const total = taxable + tax;
@@ -1754,7 +1795,8 @@ function POS({ t, products, setProducts, refetchProducts, refetchMovements, cust
       const { sale } = await api.createSale({
         customerId,
         items: cart.map(i => ({ productId: i.productId, qty: i.qty })),
-        discountPct: discount,
+        discountPct: discountMode === 'percent' ? discount : 0,
+        discountAmount: discountMode === 'amount' ? discount : 0,
         paymentMethod: payment,
       });
       // The backend is authoritative for prices/totals — it recomputes everything from the
@@ -1772,7 +1814,7 @@ function POS({ t, products, setProducts, refetchProducts, refetchMovements, cust
       logAudit({ action: `Completed sale ${sale.invoice_no}`, module: 'POS', before: '-', after: money(Number(sale.total), companyInfo.currency) });
       notify(`Sale ${sale.invoice_no} completed successfully.`);
       setReceipt(receiptData);
-      setCart([]); setDiscount(0); setPayment('Cash');
+      setCart([]); setDiscount(0); setDiscountMode('percent'); setPayment('Cash');
     } catch (err) {
       notify(err.message, 'error');
     } finally {
@@ -1805,7 +1847,7 @@ function POS({ t, products, setProducts, refetchProducts, refetchMovements, cust
               return (
                 <Card key={p.id} t={t} className="p-3 cursor-pointer relative transition-all"
                   style={{
-                    opacity: p.stockQty <= 0 ? 0.5 : 1,
+                    opacity: p.shopQty <= 0 ? 0.5 : 1,
                     outline: inCart ? `2px solid ${t.accent}` : '2px solid transparent',
                     background: inCart ? (t.accentSoft || t.surfaceAlt) : undefined,
                   }}>
@@ -1826,8 +1868,11 @@ function POS({ t, products, setProducts, refetchProducts, refetchMovements, cust
                     <div className="text-xs mb-1" style={{ color: t.textFaint, fontFamily: "'JetBrains Mono',monospace" }}>{p.sku}</div>
                     <div className="flex items-center justify-between">
                       <span className="text-sm font-semibold">{fmt(p.sellPrice)}</span>
-                      <Badge t={t} tone={p.stockQty <= p.reorderLevel ? 'danger' : 'success'}>{p.stockQty} left</Badge>
+                      <Badge t={t} tone={p.shopQty <= p.reorderLevel ? 'danger' : 'success'}>{p.shopQty} left</Badge>
                     </div>
+                    {p.shopQty <= 0 && p.warehouseQty > 0 && (
+                      <div className="text-xs mt-1" style={{ color: t.warning || t.textMuted }}>Out of stock at shop · {p.warehouseQty} in warehouse — transfer required</div>
+                    )}
                   </div>
                 </Card>
               );
@@ -1863,7 +1908,17 @@ function POS({ t, products, setProducts, refetchProducts, refetchMovements, cust
               </div>
             </Field>
             <div className="grid grid-cols-2 gap-2">
-              <Field t={t} label="Discount %"><TInput t={t} type="number" value={discount} onChange={e => setDiscount(+e.target.value)} /></Field>
+              <Field t={t} label={discountMode === 'amount' ? `Discount (${companyInfo.currency})` : 'Discount %'}>
+                <div className="flex items-center gap-1.5">
+                  <div className="flex-1 min-w-0"><TInput t={t} type="number" value={discount} onChange={e => setDiscount(+e.target.value)} /></div>
+                  <div className="w-20 shrink-0">
+                    <TSelect t={t} value={discountMode} onChange={e => { setDiscountMode(e.target.value); setDiscount(0); }}>
+                      <option value="percent">%</option>
+                      <option value="amount">Amount</option>
+                    </TSelect>
+                  </div>
+                </div>
+              </Field>
               <Field t={t} label="Payment"><TSelect t={t} value={payment} onChange={e => setPayment(e.target.value)}><option>Cash</option><option>Card</option><option>Mobile Money</option><option>Credit</option></TSelect></Field>
             </div>
           </div>
@@ -2801,7 +2856,7 @@ function Suppliers({ t, suppliers, refetchSuppliers, purchaseOrders, companyInfo
 function ReturnsModule({ t, products, refetchProducts, refetchMovements, sales, customers, refetchCustomers, suppliers, refetchSuppliers, returns, refetchReturns, companyInfo, notify, logAudit }) {
   const [tab, setTab] = useState('customer');
   const [submitting, setSubmitting] = useState(false);
-  const [form, setForm] = useState({ productId: products[0]?.id, qty: 1, reason: '', condition: 'Resellable', customerId: customers[0]?.id, supplierId: suppliers[0]?.id });
+  const [form, setForm] = useState({ productId: products[0]?.id, qty: 1, reason: '', condition: 'Resellable', customerId: customers[0]?.id, supplierId: suppliers[0]?.id, custLocation: 'shop', suppLocation: 'warehouse' });
 
   const submitReturn = async () => {
     if (form.qty <= 0 || !form.reason) { notify('Enter a valid quantity and reason.', 'error'); return; }
@@ -2813,6 +2868,7 @@ function ReturnsModule({ t, products, refetchProducts, refetchMovements, sales, 
         productId: product.id, qty: +form.qty, reason: form.reason, condition: form.condition,
         customerId: tab === 'customer' ? +form.customerId : undefined,
         supplierId: tab === 'supplier' ? +form.supplierId : undefined,
+        location: tab === 'customer' ? form.custLocation : form.suppLocation, // where the goods go back to / leave from
       });
       await Promise.all([refetchProducts(), refetchReturns(), refetchMovements(), tab === 'customer' ? refetchCustomers() : refetchSuppliers()]);
       logAudit({ action: `Processed ${tab} return ${created.ref_no}`, module: 'Returns', before: '-', after: `Qty: ${form.qty}` });
@@ -2843,6 +2899,11 @@ function ReturnsModule({ t, products, refetchProducts, refetchMovements, sales, 
           </Field>
           <Field t={t} label="Quantity"><TInput t={t} type="number" value={form.qty} onChange={e => setForm(f => ({ ...f, qty: +e.target.value }))} /></Field>
           <Field t={t} label="Condition"><TSelect t={t} value={form.condition} onChange={e => setForm(f => ({ ...f, condition: e.target.value }))}><option>Resellable</option><option>Damaged</option></TSelect></Field>
+          <Field t={t} label={tab === 'customer' ? 'Resellable goods go back to' : 'Goods are taken from'}>
+            <TSelect t={t} value={tab === 'customer' ? form.custLocation : form.suppLocation} onChange={e => setForm(f => ({ ...f, [tab === 'customer' ? 'custLocation' : 'suppLocation']: e.target.value }))}>
+              <option value="shop">Shop</option><option value="warehouse">Warehouse</option>
+            </TSelect>
+          </Field>
         </div>
         <div className="mt-3"><Field t={t} label="Reason"><TInput t={t} value={form.reason} onChange={e => setForm(f => ({ ...f, reason: e.target.value }))} placeholder="e.g. Wrong part ordered, defective unit…" /></Field></div>
         <div className="mt-3 flex justify-end"><Btn t={t} variant="primary" onClick={submitReturn}>Process {tab === 'customer' ? 'Customer' : 'Supplier'} Return</Btn></div>
@@ -3535,6 +3596,480 @@ function SettingsPage({ t, companyInfo, setCompanyInfo, notify, role, logout, se
 }
 
 /* ============================== INVENTORY CONTROL CENTER ============================== */
+/* ============================== WAREHOUSE & SHOP (locations + transfers) ============================== */
+// Stock lives in two real places: the WAREHOUSE (the store) and the SHOP (the sales floor). Only
+// shop stock can be sold at the POS; warehouse stock reaches the shop through a transfer that is
+// dispatched, then received. Everything here is a thin screen over /api/transfers and
+// /api/inventory — the server enforces every rule (stock limits, roles, no double dispatch/receipt).
+const TRANSFER_TONE = { 'Pending': 'warning', 'In Transit': 'steel', 'Discrepancy': 'danger', 'Completed': 'success', 'Cancelled': 'muted' };
+const cap = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
+
+function WarehouseShop({ t, products, refetchProducts, refetchMovements, role, notify, logAudit, setConfirm }) {
+  const [tab, setTab] = useState('overview');
+  const [search, setSearch] = useState('');
+  const [overview, setOverview] = useState(null);
+  const [transfers, setTransfers] = useState([]);
+  const [transferFilter, setTransferFilter] = useState('All');
+  const [locMovements, setLocMovements] = useState([]);
+  const [newOpen, setNewOpen] = useState(false);
+  const [newPreset, setNewPreset] = useState(null);       // product id to pre-fill in the new-transfer form
+  const [detail, setDetail] = useState(null);             // transfer being viewed
+  const [receiving, setReceiving] = useState(null);       // transfer being received
+  const [allocOpen, setAllocOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  const canManage = ['Admin', 'Manager', 'Inventory', 'Warehouse'].includes(role);   // create / dispatch / cancel
+  const canReceive = ['Admin', 'Manager', 'Inventory', 'Sales'].includes(role);      // confirm receipt
+  const canResolve = ['Admin', 'Manager'].includes(role);                            // settle a shortfall
+
+  const reload = async () => {
+    try {
+      const [ov, tr] = await Promise.all([api.inventoryOverview(), api.listTransfers()]);
+      setOverview(ov); setTransfers(tr.transfers);
+    } catch (err) { notify(err.message, 'error'); }
+  };
+  useEffect(() => { reload(); }, []);
+  useEffect(() => {
+    if (tab !== 'warehouse' && tab !== 'shop') return;
+    api.listMovements({ location: tab, pageSize: 40 })
+      .then(d => setLocMovements(d.movements.map(movementFromApi)))
+      .catch(err => notify(err.message, 'error'));
+  }, [tab, transfers]);
+
+  // After ANY stock-changing action: refresh this screen AND the shared product list the POS reads.
+  const afterChange = async () => { await Promise.all([reload(), refetchProducts(), refetchMovements()]); };
+
+  const run = async (fn, okMsg) => {
+    setBusy(true);
+    try { await fn(); await afterChange(); if (okMsg) notify(okMsg); return true; }
+    catch (err) { notify(err.message, 'error'); await afterChange().catch(() => {}); return false; }
+    finally { setBusy(false); }
+  };
+
+  const q = search.trim().toLowerCase();
+  const match = (p) => !q || p.name.toLowerCase().includes(q) || p.sku.toLowerCase().includes(q) || (p.partNumber || '').toLowerCase().includes(q);
+  const shopStatus = (p) => (p.shopQty === 0 ? 'out' : p.shopQty <= p.reorderLevel ? 'low' : 'ok');
+
+  const dispatch = (tr) => setConfirm({
+    title: `Dispatch ${tr.transfer_no}?`,
+    message: `This removes the listed products from the ${tr.from_location} now. They stay "in transit" — not sellable anywhere — until the ${tr.to_location} confirms receipt.`,
+    confirmLabel: 'Dispatch',
+    onConfirm: () => run(async () => { await api.dispatchTransfer(tr.id); logAudit({ action: `Dispatched ${tr.transfer_no}`, module: 'Stock Transfers', before: '-', after: `${tr.from_location} → ${tr.to_location}` }); }, `${tr.transfer_no} dispatched.`),
+  });
+  const cancel = (tr) => setConfirm({
+    title: `Cancel ${tr.transfer_no}?`, message: 'No stock has moved yet, so nothing needs undoing. This transfer will be marked cancelled.', confirmLabel: 'Cancel transfer',
+    onConfirm: () => run(() => api.cancelTransfer(tr.id), `${tr.transfer_no} cancelled.`),
+  });
+  const resolve = (tr) => setConfirm({
+    title: `Resolve shortfall on ${tr.transfer_no}?`,
+    message: `The units that did not arrive will be put back in the ${tr.from_location}. If they are genuinely lost or damaged, record that afterwards with a stock adjustment.`,
+    confirmLabel: 'Return to ' + tr.from_location,
+    onConfirm: () => run(() => api.resolveTransfer(tr.id, 'Shortfall returned to source'), `Shortfall on ${tr.transfer_no} returned to the ${tr.from_location}.`),
+  });
+
+  const TABS = [{ id: 'overview', label: 'Overview' }, { id: 'warehouse', label: 'Warehouse' }, { id: 'shop', label: 'Shop' }, { id: 'transfers', label: `Transfers${overview && overview.pendingTransfers + overview.inTransitTransfers + overview.discrepancyTransfers > 0 ? ` (${overview.pendingTransfers + overview.inTransitTransfers + overview.discrepancyTransfers})` : ''}` }];
+
+  const MovementTable = ({ rows }) => (
+    <Card t={t} className="overflow-x-auto">
+      <table className="w-full text-sm">
+        <thead><tr style={{ borderBottom: `1px solid ${t.border}` }}>{['Date', 'Product', 'Type', 'Change', 'Balance', 'Reference', 'By'].map(h => <th key={h} className="text-left px-4 py-3 font-medium" style={{ color: t.textFaint, fontSize: 12 }}>{h}</th>)}</tr></thead>
+        <tbody>
+          {rows.map(m => (
+            <tr key={m.id} style={{ borderBottom: `1px solid ${t.border}` }}>
+              <td className="px-4 py-2.5 text-xs">{m.date}</td>
+              <td className="px-4 py-2.5">{m.productName}</td>
+              <td className="px-4 py-2.5"><Badge t={t} tone={m.type === 'Transfer-In' ? 'success' : m.type === 'Transfer-Out' ? 'steel' : 'muted'}>{m.type}</Badge></td>
+              <td className="px-4 py-2.5 font-medium" style={{ color: m.qtyChange > 0 ? t.success : t.danger }}>{m.qtyChange > 0 ? '+' : ''}{m.qtyChange}</td>
+              <td className="px-4 py-2.5">{m.balanceBefore} → {m.balanceAfter}</td>
+              <td className="px-4 py-2.5 text-xs" style={{ fontFamily: "'JetBrains Mono',monospace" }}>{m.reference}</td>
+              <td className="px-4 py-2.5 text-xs">{m.userName}</td>
+            </tr>
+          ))}
+          {rows.length === 0 && <tr><td colSpan={7} className="px-4 py-8 text-center text-sm" style={{ color: t.textFaint }}>No stock movements recorded here yet.</td></tr>}
+        </tbody>
+      </table>
+    </Card>
+  );
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div>
+          <h1 className="text-xl font-semibold" style={{ fontFamily: "'Space Grotesk',sans-serif" }}>Warehouse &amp; Shop</h1>
+          <p className="text-sm" style={{ color: t.textMuted }}>Stock held in the warehouse is not sellable until it is transferred to the shop and received there.</p>
+        </div>
+        {canManage && <Btn t={t} variant="primary" icon={Truck} onClick={() => { setNewPreset(null); setNewOpen(true); }}>New Transfer</Btn>}
+      </div>
+
+      <div className="flex gap-2 flex-wrap">
+        {TABS.map(x => (
+          <button key={x.id} onClick={() => setTab(x.id)} className="px-4 py-2 rounded-md text-sm font-medium"
+            style={{ background: tab === x.id ? t.accentSoft : t.surfaceAlt, color: tab === x.id ? t.accent : t.textMuted }}>{x.label}</button>
+        ))}
+      </div>
+
+      {/* ---------- OVERVIEW ---------- */}
+      {tab === 'overview' && (
+        <>
+          {overview && overview.unallocatedUnits > 0 && (
+            <Card t={t} className="p-4 flex items-center justify-between gap-3 flex-wrap" style={{ border: `1px solid ${t.warning}` }}>
+              <div className="flex items-start gap-2 text-sm">
+                <AlertTriangle size={16} style={{ color: t.warning, marginTop: 2 }} />
+                <span><strong>{overview.unallocatedUnits} units of existing stock haven't been placed in a location yet.</strong> They can't be sold at the POS until an owner or manager says how many are in the warehouse and how many are at the shop.</span>
+              </div>
+              {['Admin', 'Manager'].includes(role) && <Btn t={t} variant="primary" onClick={() => setAllocOpen(true)}>Allocate existing stock</Btn>}
+            </Card>
+          )}
+          <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
+            <StatCard t={t} label="Warehouse stock" value={overview ? fmt(overview.warehouseUnits) : '—'} icon={Warehouse} tone="steel" />
+            <StatCard t={t} label="Shop stock (sellable)" value={overview ? fmt(overview.shopUnits) : '—'} icon={ShoppingCart} tone="success" />
+            <StatCard t={t} label="In transit" value={overview ? fmt(overview.inTransitUnits) : '—'} icon={Truck} tone="warning" />
+            <StatCard t={t} label="Pending transfers" value={overview ? overview.pendingTransfers : '—'} icon={ClipboardList} tone="accent" />
+            <StatCard t={t} label="Company total" value={overview ? fmt(overview.companyUnits) : '—'} icon={Boxes} tone="steel" />
+          </div>
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <Card t={t} className="p-4">
+              <h3 className="font-semibold text-sm mb-1" style={{ fontFamily: "'Space Grotesk',sans-serif" }}>Out of stock at the shop — available in the warehouse</h3>
+              <p className="text-xs mb-3" style={{ color: t.textFaint }}>These can't be sold until a transfer is made.</p>
+              <div className="flex flex-col gap-1 max-h-72 overflow-y-auto">
+                {(overview?.shopOutOfStockWarehouseAvailable || []).map(p => (
+                  <div key={p.id} className="flex items-center justify-between gap-2 text-sm py-1.5" style={{ borderBottom: `1px solid ${t.border}` }}>
+                    <span className="min-w-0 truncate">{p.name} <span className="text-xs" style={{ color: t.textFaint }}>{p.sku}</span></span>
+                    <span className="flex items-center gap-2 shrink-0"><Badge t={t} tone="steel">{p.warehouse_qty} in warehouse</Badge>
+                      {canManage && <Btn t={t} variant="ghost" onClick={() => { setNewPreset(p.id); setNewOpen(true); }}>Transfer</Btn>}</span>
+                  </div>
+                ))}
+                {overview && overview.shopOutOfStockWarehouseAvailable.length === 0 && <p className="text-sm" style={{ color: t.textFaint }}>Nothing — every product with warehouse stock also has shop stock.</p>}
+              </div>
+            </Card>
+            <Card t={t} className="p-4">
+              <h3 className="font-semibold text-sm mb-1" style={{ fontFamily: "'Space Grotesk',sans-serif" }}>Running low at the shop</h3>
+              <p className="text-xs mb-3" style={{ color: t.textFaint }}>At or below the reorder level, with stock in the warehouse to replenish from.</p>
+              <div className="flex flex-col gap-1 max-h-72 overflow-y-auto">
+                {(overview?.shopNeedsReplenishment || []).map(p => (
+                  <div key={p.id} className="flex items-center justify-between gap-2 text-sm py-1.5" style={{ borderBottom: `1px solid ${t.border}` }}>
+                    <span className="min-w-0 truncate">{p.name} <span className="text-xs" style={{ color: t.textFaint }}>{p.sku}</span></span>
+                    <span className="flex items-center gap-2 shrink-0"><Badge t={t} tone="danger">{p.shop_qty} at shop</Badge><Badge t={t} tone="steel">{p.warehouse_qty} in warehouse</Badge>
+                      {canManage && <Btn t={t} variant="ghost" onClick={() => { setNewPreset(p.id); setNewOpen(true); }}>Transfer</Btn>}</span>
+                  </div>
+                ))}
+                {overview && overview.shopNeedsReplenishment.length === 0 && <p className="text-sm" style={{ color: t.textFaint }}>Nothing needs replenishing right now.</p>}
+              </div>
+            </Card>
+          </div>
+        </>
+      )}
+
+      {/* ---------- WAREHOUSE ---------- */}
+      {tab === 'warehouse' && (
+        <>
+          <div className="flex items-center gap-2 px-3 py-2 rounded-md max-w-md" style={{ background: t.surface, border: `1px solid ${t.border}` }}>
+            <Search size={15} style={{ color: t.textFaint }} />
+            <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search warehouse stock…" className="bg-transparent outline-none text-sm w-full" style={{ color: t.text }} />
+          </div>
+          <Card t={t} className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead><tr style={{ borderBottom: `1px solid ${t.border}` }}>{['SKU', 'Product', 'In warehouse', 'At shop', 'In transit', ''].map(h => <th key={h} className="text-left px-4 py-3 font-medium" style={{ color: t.textFaint, fontSize: 12 }}>{h}</th>)}</tr></thead>
+              <tbody>
+                {products.filter(p => (p.warehouseQty > 0 || p.inTransitQty > 0) && match(p)).map(p => (
+                  <tr key={p.id} style={{ borderBottom: `1px solid ${t.border}` }}>
+                    <td className="px-4 py-2.5 text-xs" style={{ fontFamily: "'JetBrains Mono',monospace" }}>{p.sku}</td>
+                    <td className="px-4 py-2.5">{p.name}</td>
+                    <td className="px-4 py-2.5 font-semibold">{p.warehouseQty}</td>
+                    <td className="px-4 py-2.5">{p.shopQty}</td>
+                    <td className="px-4 py-2.5">{p.inTransitQty > 0 ? <Badge t={t} tone="warning">{p.inTransitQty}</Badge> : '—'}</td>
+                    <td className="px-4 py-2.5 text-right">{canManage && p.warehouseQty > 0 && <Btn t={t} variant="ghost" onClick={() => { setNewPreset(p.id); setNewOpen(true); }}>Transfer to shop</Btn>}</td>
+                  </tr>
+                ))}
+                {products.filter(p => (p.warehouseQty > 0 || p.inTransitQty > 0) && match(p)).length === 0 && <tr><td colSpan={6} className="px-4 py-8 text-center text-sm" style={{ color: t.textFaint }}>No warehouse stock found.</td></tr>}
+              </tbody>
+            </table>
+          </Card>
+          <h3 className="font-semibold text-sm" style={{ fontFamily: "'Space Grotesk',sans-serif" }}>Warehouse stock movement history</h3>
+          <MovementTable rows={locMovements} />
+        </>
+      )}
+
+      {/* ---------- SHOP ---------- */}
+      {tab === 'shop' && (
+        <>
+          <div className="flex items-center gap-2 px-3 py-2 rounded-md max-w-md" style={{ background: t.surface, border: `1px solid ${t.border}` }}>
+            <Search size={15} style={{ color: t.textFaint }} />
+            <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search shop stock…" className="bg-transparent outline-none text-sm w-full" style={{ color: t.text }} />
+          </div>
+          <Card t={t} className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead><tr style={{ borderBottom: `1px solid ${t.border}` }}>{['SKU', 'Product', 'At shop (sellable)', 'Reorder level', 'Status', 'Warehouse has', ''].map(h => <th key={h} className="text-left px-4 py-3 font-medium" style={{ color: t.textFaint, fontSize: 12 }}>{h}</th>)}</tr></thead>
+              <tbody>
+                {products.filter(p => (p.shopQty > 0 || p.warehouseQty > 0) && match(p)).map(p => {
+                  const st = shopStatus(p);
+                  return (
+                    <tr key={p.id} style={{ borderBottom: `1px solid ${t.border}` }}>
+                      <td className="px-4 py-2.5 text-xs" style={{ fontFamily: "'JetBrains Mono',monospace" }}>{p.sku}</td>
+                      <td className="px-4 py-2.5">{p.name}</td>
+                      <td className="px-4 py-2.5 font-semibold">{p.shopQty}</td>
+                      <td className="px-4 py-2.5">{p.reorderLevel}</td>
+                      <td className="px-4 py-2.5"><Badge t={t} tone={st === 'out' ? 'danger' : st === 'low' ? 'warning' : 'success'}>{st === 'out' ? 'Out of stock at shop' : st === 'low' ? 'Needs replenishing' : 'OK'}</Badge></td>
+                      <td className="px-4 py-2.5">{p.warehouseQty}</td>
+                      <td className="px-4 py-2.5 text-right">{canManage && st !== 'ok' && p.warehouseQty > 0 && <Btn t={t} variant="ghost" onClick={() => { setNewPreset(p.id); setNewOpen(true); }}>Replenish</Btn>}</td>
+                    </tr>
+                  );
+                })}
+                {products.filter(p => (p.shopQty > 0 || p.warehouseQty > 0) && match(p)).length === 0 && <tr><td colSpan={7} className="px-4 py-8 text-center text-sm" style={{ color: t.textFaint }}>No shop stock found.</td></tr>}
+              </tbody>
+            </table>
+          </Card>
+          <h3 className="font-semibold text-sm" style={{ fontFamily: "'Space Grotesk',sans-serif" }}>Shop stock movement history (includes stock received from the warehouse)</h3>
+          <MovementTable rows={locMovements} />
+        </>
+      )}
+
+      {/* ---------- TRANSFERS ---------- */}
+      {tab === 'transfers' && (
+        <>
+          <div className="flex gap-2 flex-wrap">
+            {['All', 'Pending', 'In Transit', 'Discrepancy', 'Completed', 'Cancelled'].map(s => (
+              <button key={s} onClick={() => setTransferFilter(s)} className="px-3 py-1.5 rounded-md text-xs font-medium"
+                style={{ background: transferFilter === s ? t.accentSoft : t.surfaceAlt, color: transferFilter === s ? t.accent : t.textMuted }}>{s}</button>
+            ))}
+          </div>
+          <Card t={t} className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead><tr style={{ borderBottom: `1px solid ${t.border}` }}>{['Transfer #', 'Route', 'Items', 'Status', 'Created', 'By', 'Actions'].map(h => <th key={h} className="text-left px-4 py-3 font-medium" style={{ color: t.textFaint, fontSize: 12 }}>{h}</th>)}</tr></thead>
+              <tbody>
+                {transfers.filter(x => transferFilter === 'All' || x.status === transferFilter).map(x => (
+                  <tr key={x.id} style={{ borderBottom: `1px solid ${t.border}` }}>
+                    <td className="px-4 py-2.5"><button className="underline" style={{ fontFamily: "'JetBrains Mono',monospace" }} onClick={() => setDetail(x)}>{x.transfer_no}</button></td>
+                    <td className="px-4 py-2.5 whitespace-nowrap">{cap(x.from_location)} → {cap(x.to_location)}</td>
+                    <td className="px-4 py-2.5">{x.items.length} product{x.items.length === 1 ? '' : 's'} · {x.items.reduce((s, i) => s + i.qtyRequested, 0)} unit{x.items.reduce((s, i) => s + i.qtyRequested, 0) === 1 ? '' : 's'}</td>
+                    <td className="px-4 py-2.5"><Badge t={t} tone={TRANSFER_TONE[x.status]}>{x.status}</Badge></td>
+                    <td className="px-4 py-2.5 text-xs">{(x.created_at || '').slice(0, 10)}</td>
+                    <td className="px-4 py-2.5 text-xs">{x.created_by_name}</td>
+                    <td className="px-4 py-2.5">
+                      <div className="flex gap-1.5 flex-wrap">
+                        {x.status === 'Pending' && canManage && <Btn t={t} variant="primary" disabled={busy} onClick={() => dispatch(x)}>Dispatch</Btn>}
+                        {x.status === 'Pending' && canManage && <Btn t={t} variant="ghost" disabled={busy} onClick={() => cancel(x)}>Cancel</Btn>}
+                        {x.status === 'In Transit' && canReceive && <Btn t={t} variant="primary" disabled={busy} onClick={() => setReceiving(x)}>Receive</Btn>}
+                        {x.status === 'Discrepancy' && canResolve && <Btn t={t} variant="danger" disabled={busy} onClick={() => resolve(x)}>Resolve shortfall</Btn>}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+                {transfers.filter(x => transferFilter === 'All' || x.status === transferFilter).length === 0 && <tr><td colSpan={7} className="px-4 py-8 text-center text-sm" style={{ color: t.textFaint }}>No transfers yet.</td></tr>}
+              </tbody>
+            </table>
+          </Card>
+        </>
+      )}
+
+      {newOpen && <NewTransferModal t={t} products={products} preset={newPreset} busy={busy} onClose={() => setNewOpen(false)}
+        onSubmit={async (payload, dispatchNow) => {
+          let created = null;
+          const ok = await run(async () => {
+            const res = await api.createTransfer(payload);
+            created = res.transfer;
+            logAudit({ action: `Created transfer ${created.transfer_no}`, module: 'Stock Transfers', before: '-', after: `${payload.fromLocation} → ${payload.toLocation}` });
+            if (dispatchNow) await api.dispatchTransfer(created.id);
+          }, dispatchNow ? 'Transfer created and dispatched.' : 'Transfer created. Dispatch it when the goods leave.');
+          if (ok) { setNewOpen(false); setTab('transfers'); }
+        }} />}
+
+      {receiving && <ReceiveTransferModal t={t} transfer={receiving} busy={busy} onClose={() => setReceiving(null)}
+        onSubmit={async (lines) => {
+          const ok = await run(async () => {
+            await api.receiveTransfer(receiving.id, lines);
+            logAudit({ action: `Received ${receiving.transfer_no}`, module: 'Stock Transfers', before: '-', after: lines.map(l => l.qtyReceived).join(', ') });
+          }, `${receiving.transfer_no} received.`);
+          if (ok) setReceiving(null);
+        }} />}
+
+      {detail && <TransferDetailModal t={t} transfer={transfers.find(x => x.id === detail.id) || detail} onClose={() => setDetail(null)} />}
+
+      {allocOpen && <AllocateStockModal t={t} products={products.filter(p => p.unallocatedQty > 0)} busy={busy} onClose={() => setAllocOpen(false)}
+        onSubmit={async (allocations) => {
+          const ok = await run(async () => {
+            await api.allocateOpening(allocations);
+            logAudit({ action: `Allocated existing stock to warehouse/shop (${allocations.length} products)`, module: 'Stock Transfers', before: 'Unallocated', after: 'Warehouse / Shop' });
+          }, 'Existing stock allocated.');
+          if (ok) setAllocOpen(false);
+        }} />}
+    </div>
+  );
+}
+
+function NewTransferModal({ t, products, preset, busy, onClose, onSubmit }) {
+  const [from, setFrom] = useState('warehouse');
+  const to = from === 'warehouse' ? 'shop' : 'warehouse';
+  const qtyAt = (p, loc) => (loc === 'warehouse' ? p.warehouseQty : p.shopQty);
+  const [lines, setLines] = useState(() => (preset ? [{ productId: preset, qty: 1 }] : [{ productId: '', qty: 1 }]));
+  const [notes, setNotes] = useState('');
+  const [dispatchNow, setDispatchNow] = useState(false);
+  const available = products.filter(p => qtyAt(p, from) > 0);
+  const setLine = (i, patch) => setLines(ls => ls.map((l, idx) => (idx === i ? { ...l, ...patch } : l)));
+  const problems = [];
+  const seen = new Set();
+  lines.forEach((l, i) => {
+    const p = products.find(x => x.id === +l.productId);
+    if (!p) { problems.push(`Line ${i + 1}: choose a product.`); return; }
+    if (seen.has(p.id)) problems.push(`${p.name} is listed twice.`); seen.add(p.id);
+    if (!Number.isInteger(+l.qty) || +l.qty <= 0) problems.push(`${p.name}: enter a whole quantity above zero.`);
+    else if (+l.qty > qtyAt(p, from)) problems.push(`${p.name}: only ${qtyAt(p, from)} available in the ${from}.`);
+  });
+  return (
+    <Modal t={t} wide title="New Stock Transfer" onClose={onClose}
+      footer={<>
+        <Btn t={t} variant="secondary" onClick={onClose}>Close</Btn>
+        <Btn t={t} variant="primary" disabled={busy || problems.length > 0}
+          onClick={() => onSubmit({ fromLocation: from, toLocation: to, notes: notes || undefined, items: lines.map(l => ({ productId: +l.productId, qty: +l.qty })) }, dispatchNow)}>
+          {busy ? 'Working…' : dispatchNow ? 'Create & Dispatch' : 'Create Transfer'}
+        </Btn>
+      </>}>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
+        <Field t={t} label="From (source)">
+          <TSelect t={t} value={from} onChange={e => { setFrom(e.target.value); setLines([{ productId: '', qty: 1 }]); }}>
+            <option value="warehouse">Warehouse</option><option value="shop">Shop</option>
+          </TSelect>
+        </Field>
+        <Field t={t} label="To (destination)"><TInput t={t} value={cap(to)} disabled readOnly /></Field>
+      </div>
+      <div className="flex flex-col gap-2">
+        {lines.map((l, i) => {
+          const p = products.find(x => x.id === +l.productId);
+          return (
+            <div key={i} className="grid grid-cols-12 gap-2 items-end">
+              <div className="col-span-7">
+                <Field t={t} label={i === 0 ? 'Product' : ''}>
+                  <TSelect t={t} value={l.productId} onChange={e => setLine(i, { productId: e.target.value })}>
+                    <option value="">Select a product…</option>
+                    {available.map(x => <option key={x.id} value={x.id}>{x.name} ({x.sku}) — {qtyAt(x, from)} in {from}</option>)}
+                  </TSelect>
+                </Field>
+              </div>
+              <div className="col-span-3">
+                <Field t={t} label={i === 0 ? `Qty${p ? ` (max ${qtyAt(p, from)})` : ''}` : ''}>
+                  <TInput t={t} type="number" min="1" value={l.qty} onChange={e => setLine(i, { qty: e.target.value })} />
+                </Field>
+              </div>
+              <div className="col-span-2 pb-1">
+                {lines.length > 1 && <Btn t={t} variant="ghost" icon={X} onClick={() => setLines(ls => ls.filter((_, idx) => idx !== i))} title="Remove line" />}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <div className="mt-2"><Btn t={t} variant="ghost" icon={Plus} onClick={() => setLines(ls => [...ls, { productId: '', qty: 1 }])}>Add another product</Btn></div>
+      <div className="mt-4"><Field t={t} label="Notes (optional)"><TInput t={t} value={notes} onChange={e => setNotes(e.target.value)} placeholder="e.g. Weekly shop restock" /></Field></div>
+      <label className="mt-4 flex items-center gap-2 text-sm" style={{ color: t.textMuted }}>
+        <input type="checkbox" checked={dispatchNow} onChange={e => setDispatchNow(e.target.checked)} /> Dispatch immediately (the goods are leaving now)
+      </label>
+      {problems.length > 0 && lines.some(l => l.productId) && (
+        <ul className="mt-3 text-xs flex flex-col gap-1" style={{ color: t.danger }}>{[...new Set(problems)].map(m => <li key={m}>• {m}</li>)}</ul>
+      )}
+    </Modal>
+  );
+}
+
+function ReceiveTransferModal({ t, transfer, busy, onClose, onSubmit }) {
+  const [qtys, setQtys] = useState(() => Object.fromEntries(transfer.items.map(i => [i.id, i.qtyDispatched])));
+  const shortfall = transfer.items.reduce((s, i) => s + Math.max(i.qtyDispatched - (+qtys[i.id] || 0), 0), 0);
+  const invalid = transfer.items.some(i => !Number.isInteger(+qtys[i.id]) || +qtys[i.id] < 0 || +qtys[i.id] > i.qtyDispatched);
+  return (
+    <Modal t={t} wide title={`Receive ${transfer.transfer_no} at the ${transfer.to_location}`} onClose={onClose}
+      footer={<>
+        <Btn t={t} variant="secondary" onClick={onClose}>Close</Btn>
+        <Btn t={t} variant="primary" disabled={busy || invalid}
+          onClick={() => onSubmit(transfer.items.map(i => ({ itemId: i.id, qtyReceived: +qtys[i.id] })))}>
+          {busy ? 'Working…' : shortfall > 0 ? 'Confirm receipt (with shortfall)' : 'Confirm receipt'}
+        </Btn>
+      </>}>
+      <p className="text-sm mb-3" style={{ color: t.textMuted }}>Count what physically arrived. Anything that didn't arrive stays flagged as a shortfall (and unsellable) until a manager resolves it.</p>
+      <table className="w-full text-sm">
+        <thead><tr style={{ borderBottom: `1px solid ${t.border}` }}>{['Product', 'Dispatched', 'Received'].map(h => <th key={h} className="text-left px-2 py-2 font-medium" style={{ color: t.textFaint, fontSize: 12 }}>{h}</th>)}</tr></thead>
+        <tbody>
+          {transfer.items.map(i => (
+            <tr key={i.id} style={{ borderBottom: `1px solid ${t.border}` }}>
+              <td className="px-2 py-2">{i.name} <span className="text-xs" style={{ color: t.textFaint }}>{i.sku}</span></td>
+              <td className="px-2 py-2">{i.qtyDispatched}</td>
+              <td className="px-2 py-2 w-32"><TInput t={t} type="number" min="0" max={i.qtyDispatched} value={qtys[i.id]} onChange={e => setQtys(q => ({ ...q, [i.id]: e.target.value }))} /></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {shortfall > 0 && !invalid && <p className="mt-3 text-sm" style={{ color: t.warning }}>{shortfall} unit(s) short — this transfer will be marked as having a discrepancy.</p>}
+      {invalid && <p className="mt-3 text-sm" style={{ color: t.danger }}>Each quantity must be a whole number from 0 up to what was dispatched.</p>}
+    </Modal>
+  );
+}
+
+function TransferDetailModal({ t, transfer, onClose }) {
+  const [movements, setMovements] = useState([]);
+  useEffect(() => { api.getTransfer(transfer.id).then(d => setMovements(d.movements.map(movementFromApi))).catch(() => {}); }, [transfer.id, transfer.status]);
+  const row = (label, value) => value ? <div className="flex justify-between gap-3 text-sm py-1" style={{ borderBottom: `1px solid ${t.border}` }}><span style={{ color: t.textMuted }}>{label}</span><span>{value}</span></div> : null;
+  const when = (d) => (d ? new Date(d).toLocaleString() : null);
+  return (
+    <Modal t={t} wide title={`Transfer ${transfer.transfer_no}`} onClose={onClose} footer={<Btn t={t} variant="secondary" onClick={onClose}>Close</Btn>}>
+      <div className="mb-3 flex items-center gap-2"><Badge t={t} tone={TRANSFER_TONE[transfer.status]}>{transfer.status}</Badge><span className="text-sm">{cap(transfer.from_location)} → {cap(transfer.to_location)}</span></div>
+      {row('Created', transfer.created_by_name && `${transfer.created_by_name} · ${when(transfer.created_at)}`)}
+      {row('Dispatched', transfer.dispatched_by_name && `${transfer.dispatched_by_name} · ${when(transfer.dispatched_at)}`)}
+      {row('Received', transfer.received_by_name && `${transfer.received_by_name} · ${when(transfer.received_at)}`)}
+      {row('Shortfall resolved', transfer.resolved_by_name && `${transfer.resolved_by_name} · ${when(transfer.resolved_at)}`)}
+      {row('Notes', transfer.notes)}
+      <table className="w-full text-sm mt-4">
+        <thead><tr style={{ borderBottom: `1px solid ${t.border}` }}>{['Product', 'Requested', 'Dispatched', 'Received', 'Returned to source'].map(h => <th key={h} className="text-left px-2 py-2 font-medium" style={{ color: t.textFaint, fontSize: 12 }}>{h}</th>)}</tr></thead>
+        <tbody>{transfer.items.map(i => (
+          <tr key={i.id} style={{ borderBottom: `1px solid ${t.border}` }}>
+            <td className="px-2 py-2">{i.name} <span className="text-xs" style={{ color: t.textFaint }}>{i.sku}</span></td>
+            <td className="px-2 py-2">{i.qtyRequested}</td><td className="px-2 py-2">{i.qtyDispatched}</td><td className="px-2 py-2">{i.qtyReceived}</td><td className="px-2 py-2">{i.qtyReturned}</td>
+          </tr>))}</tbody>
+      </table>
+      <h4 className="text-sm font-semibold mt-5 mb-2">Stock movements</h4>
+      {movements.length === 0 ? <p className="text-sm" style={{ color: t.textFaint }}>No stock has moved yet.</p> : movements.map(m => (
+        <div key={m.id} className="flex justify-between text-sm py-1" style={{ borderBottom: `1px solid ${t.border}` }}>
+          <span>{m.productName} · {m.type} ({m.location})</span><span style={{ color: m.qtyChange > 0 ? t.success : t.danger }}>{m.qtyChange > 0 ? '+' : ''}{m.qtyChange}</span>
+        </div>))}
+    </Modal>
+  );
+}
+
+function AllocateStockModal({ t, products, busy, onClose, onSubmit }) {
+  const [vals, setVals] = useState({});
+  const set = (id, k, v) => setVals(s => ({ ...s, [id]: { ...(s[id] || {}), [k]: v } }));
+  const rows = products.map(p => {
+    const v = vals[p.id] || {};
+    const touched = v.warehouse !== undefined && v.warehouse !== '' || v.shop !== undefined && v.shop !== '';
+    const wh = +v.warehouse || 0, sh = +v.shop || 0;
+    return { p, touched, wh, sh, ok: Number.isInteger(wh) && Number.isInteger(sh) && wh >= 0 && sh >= 0 && wh + sh === p.unallocatedQty };
+  });
+  const toSend = rows.filter(r => r.touched);
+  const allOk = toSend.length > 0 && toSend.every(r => r.ok);
+  return (
+    <Modal t={t} wide title="Allocate existing stock" onClose={onClose}
+      footer={<>
+        <Btn t={t} variant="secondary" onClick={onClose}>Close</Btn>
+        <Btn t={t} variant="primary" disabled={busy || !allOk}
+          onClick={() => onSubmit(toSend.map(r => ({ productId: r.p.id, warehouse: r.wh, shop: r.sh })))}>{busy ? 'Working…' : `Save ${toSend.length || ''} allocation${toSend.length === 1 ? '' : 's'}`}</Btn>
+      </>}>
+      <p className="text-sm mb-3" style={{ color: t.textMuted }}>For each product, enter how many units are physically in the warehouse and how many are at the shop. The two numbers must add up to the quantity shown — the company total never changes. If you don't know the real split yet, leave the row blank and count first.</p>
+      <table className="w-full text-sm">
+        <thead><tr style={{ borderBottom: `1px solid ${t.border}` }}>{['Product', 'To place', 'In warehouse', 'At shop'].map(h => <th key={h} className="text-left px-2 py-2 font-medium" style={{ color: t.textFaint, fontSize: 12 }}>{h}</th>)}</tr></thead>
+        <tbody>
+          {rows.map(({ p, touched, ok, wh, sh }) => (
+            <tr key={p.id} style={{ borderBottom: `1px solid ${t.border}` }}>
+              <td className="px-2 py-2">{p.name} <span className="text-xs" style={{ color: t.textFaint }}>{p.sku}</span></td>
+              <td className="px-2 py-2 font-semibold">{p.unallocatedQty}</td>
+              <td className="px-2 py-2 w-28"><TInput t={t} type="number" min="0" value={vals[p.id]?.warehouse ?? ''} onChange={e => set(p.id, 'warehouse', e.target.value)} /></td>
+              <td className="px-2 py-2 w-28">
+                <TInput t={t} type="number" min="0" value={vals[p.id]?.shop ?? ''} onChange={e => set(p.id, 'shop', e.target.value)} />
+                {touched && !ok && <div className="text-xs mt-1" style={{ color: t.danger }}>{wh + sh} ≠ {p.unallocatedQty}</div>}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </Modal>
+  );
+}
+
 function InventoryControlCenter({ t, products, refetchProducts, movements, refetchMovements, addMovement, sales, purchaseOrders, suppliers, customers, returns, companyInfo, notify, logAudit, role, setActiveModule, categories }) {
   const [tab, setTab] = useState('all');
   const [search, setSearch] = useState('');
@@ -3542,7 +4077,7 @@ function InventoryControlCenter({ t, products, refetchProducts, movements, refet
   const realCategories = [...new Set([...(categories || []), ...products.map(p => p.category).filter(Boolean)])].sort();
   const [statusFilter, setStatusFilter] = useState('All');
   const [selected, setSelected] = useState(null);
-  const [adjForm, setAdjForm] = useState({ productId: products[0]?.id, direction: 'Increase', qty: 1, reason: '' });
+  const [adjForm, setAdjForm] = useState({ productId: products[0]?.id, direction: 'Increase', qty: 1, reason: '', location: 'shop' });
   const canAdjust = ['Admin', 'Manager', 'Inventory'].includes(role);
 
   const today = todayStr();
@@ -3568,11 +4103,11 @@ function InventoryControlCenter({ t, products, refetchProducts, movements, refet
     const product = products.find(p => p.id === +adjForm.productId);
     setAdjusting(true);
     try {
-      const { product: updated } = await api.adjustStock(product.id, { direction: adjForm.direction, qty: +adjForm.qty, reason: adjForm.reason });
+      const { product: updated } = await api.adjustStock(product.id, { direction: adjForm.direction, qty: +adjForm.qty, reason: adjForm.reason, location: adjForm.location });
       await Promise.all([refetchProducts(), refetchMovements()]);
       logAudit({ action: `Stock adjustment on ${product.name}: ${adjForm.direction} ${adjForm.qty} — ${adjForm.reason}`, module: 'Inventory Control Center', before: `Stock: ${product.stockQty}`, after: `Stock: ${updated.stock_qty}` });
       notify(`Adjustment recorded for ${product.name}.`);
-      setAdjForm({ productId: products[0]?.id, direction: 'Increase', qty: 1, reason: '' });
+      setAdjForm({ productId: products[0]?.id, direction: 'Increase', qty: 1, reason: '', location: adjForm.location });
     } catch (err) {
       notify(err.message, 'error');
     } finally {
@@ -3703,8 +4238,14 @@ function InventoryControlCenter({ t, products, refetchProducts, movements, refet
           {!canAdjust && <p className="text-sm mb-3" style={{ color: t.warning }}>Your role can view adjustments but is not authorized to create them.</p>}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 items-end">
             <Field t={t} label="Product"><TSelect t={t} disabled={!canAdjust} value={adjForm.productId} onChange={e => setAdjForm(f => ({ ...f, productId: e.target.value }))}>{products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</TSelect></Field>
-            <Field t={t} label="Direction"><TSelect t={t} disabled={!canAdjust} value={adjForm.direction} onChange={e => setAdjForm(f => ({ ...f, direction: e.target.value }))}><option>Increase</option><option>Decrease</option><option>Damage</option></TSelect></Field>
+            <Field t={t} label="Direction"><TSelect t={t} disabled={!canAdjust} value={adjForm.direction} onChange={e => setAdjForm(f => ({ ...f, direction: e.target.value, location: e.target.value === 'Increase' && f.location === 'unallocated' ? 'shop' : f.location }))}><option>Increase</option><option>Decrease</option><option>Damage</option></TSelect></Field>
             <Field t={t} label="Quantity"><TInput t={t} disabled={!canAdjust} type="number" value={adjForm.qty} onChange={e => setAdjForm(f => ({ ...f, qty: +e.target.value }))} /></Field>
+            <Field t={t} label="Location">
+              <TSelect t={t} disabled={!canAdjust} value={adjForm.location} onChange={e => setAdjForm(f => ({ ...f, location: e.target.value }))}>
+                <option value="shop">Shop</option><option value="warehouse">Warehouse</option>
+                {adjForm.direction !== 'Increase' && <option value="unallocated">Unallocated (old stock)</option>}
+              </TSelect>
+            </Field>
             <Btn t={t} variant="primary" disabled={!canAdjust || adjusting} onClick={submitAdjustment}>{adjusting ? 'Applying…' : 'Apply Adjustment'}</Btn>
           </div>
           <div className="mt-3"><Field t={t} label="Reason (mandatory)"><TInput t={t} disabled={!canAdjust} value={adjForm.reason} onChange={e => setAdjForm(f => ({ ...f, reason: e.target.value }))} placeholder="e.g. Physical count correction, warehouse damage…" /></Field></div>
